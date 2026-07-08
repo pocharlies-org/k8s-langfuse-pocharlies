@@ -1,0 +1,46 @@
+# Ingress isolation for the langfuse namespace (mirrors the dgx-synapse-mcp pattern).
+# Posture: pods are reachable only from inside the cluster overlay (pod CIDR) and from
+# Tailscale — never directly from the raw LAN/internet. External users reach the UI only
+# through the Traefik edge (a pod in the CIDR) + SSO.
+#
+# The broad allow deliberately selects ONLY the app pods (`app in (web, worker)`), NOT the
+# ClickHouse/Valkey trace stores. Those are left to the chart's own subchart
+# NetworkPolicies (langfuse-clickhouse / langfuse-redis), which scope ingress to their
+# service ports (8123/9000 / 6379) and are additionally password-gated — so the trace
+# stores are not blanket-opened on all ports by this file.
+#
+# Egress is intentionally unrestricted (Ingress-only policy) so Langfuse can reach the
+# shared Postgres (databases ns), MinIO (minio ns) and its own CH/Valkey.
+#
+# Hardening TODO (not enabled to keep the first deploy low-risk): disable the subchart
+# NetworkPolicies (redis.networkPolicy.enabled / clickhouse.networkPolicy.enabled) and add
+# custom policies allowing CH/Valkey ingress only from same-namespace langfuse pods.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: langfuse-default-deny-ingress
+  namespace: langfuse
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: langfuse-allow-app-pods
+  namespace: langfuse
+spec:
+  # Only the web (UI/API, :3000) and worker (:3030) pods — NOT clickhouse/valkey.
+  podSelector:
+    matchExpressions:
+      - { key: app, operator: In, values: [web, worker] }
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 10.42.0.0/16      # k3s pod CIDR (traefik-edge, litellm, health probes)
+        - ipBlock:
+            cidr: 100.64.0.0/10     # Tailscale (admin debugging over VPN)
+  policyTypes:
+    - Ingress

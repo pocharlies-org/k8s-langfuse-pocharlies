@@ -1,0 +1,170 @@
+# Langfuse v3 self-hosted — Helm values (chart langfuse/langfuse 1.5.38, appVersion 3.205.1)
+#
+# Consumed by the ArgoCD Application `langfuse` (k8s-gitops-pocharlies/apps/langfuse.yaml)
+# as a multi-source Helm valueFile: `$values/k8s/values.yaml`.
+#
+# Topology decision (see README.md §Arquitectura):
+#   - PostgreSQL  -> REUSE shared CNPG cluster `postgres-shared` (own DB `langfuse`, role `langfuse`)
+#   - S3 / blob   -> REUSE shared MinIO (`minio-s3.minio.svc`, own bucket `langfuse`)
+#   - Redis/Valkey-> DEDICATED (chart-bundled) — isolated BullMQ queue, avoids shared-valkey
+#                    Sentinel + out-of-band ACL secret. Switch to shared-valkey: see README §Rollback.
+#   - ClickHouse  -> DEDICATED (chart-bundled), single node — required by v3, no in-cluster CH existed.
+#
+# All secrets come from the k8s Secret `langfuse-secrets`, materialised by the
+# ExternalSecret in k8s/platform/externalsecret.yaml (Vault path `secret/langfuse`).
+# NOTHING sensitive is stored in this file.
+
+global:
+  security:
+    # Chart default: Bitnami subchart images resolve from bitnamilegacy/* (free tier).
+    # Keep true so ClickHouse/Valkey images pull without a paid Bitnami subscription.
+    # To harden later: mirror to Harbor and override clickhouse.image / redis.image.
+    allowInsecureImages: true
+
+langfuse:
+  logging:
+    level: info
+    # JSON logs so Loki/Promtail can parse them like the rest of the platform.
+    format: json
+  nodeEnv: production
+  features:
+    # Privacy: do not phone home usage stats.
+    telemetryEnabled: false
+    # Security: no public self-signup. The admin user is created head-lessly
+    # (LANGFUSE_INIT_* below); access is additionally gated by oauth2-proxy SSO
+    # at the edge (see k8s/platform/ingressroute.yaml).
+    signUpDisabled: true
+
+  # App crypto — all from `langfuse-secrets` (Vault). See README for generation.
+  salt:
+    secretKeyRef: { name: langfuse-secrets, key: salt }
+  encryptionKey:
+    secretKeyRef: { name: langfuse-secrets, key: encryption-key }
+  nextauth:
+    url: https://langfuse.e-dani.com
+    secret:
+      secretKeyRef: { name: langfuse-secrets, key: nextauth-secret }
+
+  # Keep Langfuse off the ARM/GPU-scheduling nodes, in line with the app tier.
+  nodeSelector:
+    kubernetes.io/arch: amd64
+
+  # Node's default heap (~1.7 GiB) is smaller than the 2Gi container limit -> OOM.
+  # Pin it to the container size on BOTH web and worker.
+  additionalEnv:
+    - name: NODE_OPTIONS
+      value: "--max-old-space-size=2048"
+
+  web:
+    replicas: 1
+    resources:
+      requests: { cpu: 200m, memory: 1Gi }
+      limits:   { memory: 2Gi }
+    pod:
+      # Headless bootstrap: idempotent by ID — creates org/project/user on first
+      # boot if absent. The project pk-lf-/sk-lf- pair is the SAME one LiteLLM
+      # uses (mirrored into Vault secret/litellm). See README §Secretos.
+      additionalEnv:
+        - name: LANGFUSE_INIT_ORG_ID
+          value: "edani"
+        - name: LANGFUSE_INIT_ORG_NAME
+          value: "e-dani"
+        - name: LANGFUSE_INIT_PROJECT_ID
+          value: "litellm"
+        - name: LANGFUSE_INIT_PROJECT_NAME
+          value: "litellm-gateway"
+        - name: LANGFUSE_INIT_PROJECT_PUBLIC_KEY
+          valueFrom: { secretKeyRef: { name: langfuse-secrets, key: init-project-public-key } }
+        - name: LANGFUSE_INIT_PROJECT_SECRET_KEY
+          valueFrom: { secretKeyRef: { name: langfuse-secrets, key: init-project-secret-key } }
+        - name: LANGFUSE_INIT_USER_EMAIL
+          valueFrom: { secretKeyRef: { name: langfuse-secrets, key: init-user-email } }
+        - name: LANGFUSE_INIT_USER_NAME
+          value: "Dani"
+        - name: LANGFUSE_INIT_USER_PASSWORD
+          valueFrom: { secretKeyRef: { name: langfuse-secrets, key: init-user-password } }
+
+  worker:
+    replicas: 1
+    resources:
+      requests: { cpu: 200m, memory: 1Gi }
+      limits:   { memory: 2Gi }
+
+# ---- PostgreSQL: EXTERNAL (shared CNPG cluster) ----
+postgresql:
+  deploy: false
+  host: postgres-shared-rw.databases.svc.cluster.local
+  port: 5432
+  auth:
+    username: langfuse
+    database: langfuse
+    existingSecret: langfuse-secrets
+    secretKeys:
+      userPasswordKey: postgres-password
+      adminPasswordKey: postgres-password
+  migration:
+    # Prisma migrations run on web/worker boot. The `langfuse` role owns the
+    # `langfuse` DB so it can CREATE tables in public — no shadow DB needed.
+    autoMigrate: true
+
+# ---- Redis/Valkey: DEDICATED (chart-bundled, standalone) ----
+redis:
+  deploy: true
+  auth:
+    username: default
+    existingSecret: langfuse-secrets
+    existingSecretPasswordKey: redis-password
+  architecture: standalone
+  primary:
+    # BullMQ REQUIRES noeviction or it silently drops queued jobs (chart default,
+    # re-stated here so it survives value merges).
+    extraFlags:
+      - "--maxmemory-policy noeviction"
+    persistence:
+      storageClass: longhorn
+      size: 5Gi
+    nodeSelector:
+      kubernetes.io/arch: amd64
+
+# ---- ClickHouse: DEDICATED (chart-bundled), single node ----
+clickhouse:
+  deploy: true
+  # Single-node: no ON CLUSTER DDL, no Zookeeper/Keeper.
+  clusterEnabled: false
+  replicaCount: 1
+  shards: 1
+  zookeeper:
+    enabled: false
+  resourcesPreset: large   # req cpu1/mem2Gi, lim cpu1.5/mem3Gi. Tune under load.
+  auth:
+    username: default
+    existingSecret: langfuse-secrets
+    existingSecretKey: clickhouse-password
+  migration:
+    autoMigrate: true
+  persistence:
+    storageClass: longhorn
+    size: 20Gi
+  nodeSelector:
+    kubernetes.io/arch: amd64
+
+# ---- S3 / blob: EXTERNAL (shared MinIO) ----
+s3:
+  deploy: false
+  storageProvider: s3
+  bucket: langfuse
+  region: auto
+  endpoint: http://minio-s3.minio.svc.cluster.local:9000
+  forcePathStyle: true          # required for MinIO
+  accessKeyId:
+    secretKeyRef: { name: langfuse-secrets, key: s3-access-key-id }
+  secretAccessKey:
+    secretKeyRef: { name: langfuse-secrets, key: s3-secret-access-key }
+  eventUpload:
+    prefix: "events/"
+  mediaUpload:
+    enabled: true
+    prefix: "media/"
+  batchExport:
+    enabled: true
+    prefix: "exports/"

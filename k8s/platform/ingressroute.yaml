@@ -1,0 +1,29 @@
+# Public edge route for the Langfuse UI, gated by Keycloak SSO.
+# The `sso-chain` middleware (ns keycloak) = ForwardAuth to the shared oauth2-proxy,
+# same pattern as teslamate. Langfuse also has its own NextAuth login (the head-less
+# admin user), so access is double-gated: SSO at the edge + Langfuse login.
+#
+# NOTE: `langfuse-web` (port 3000) is the chart-rendered web Service (releaseName=langfuse).
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: langfuse-public
+  namespace: langfuse
+  annotations:
+    external-dns.alpha.kubernetes.io/hostname: langfuse.e-dani.com
+    external-dns.alpha.kubernetes.io/target: 57.129.17.172
+    external-dns.alpha.kubernetes.io/cloudflare-proxied: "true"
+spec:
+  entryPoints: [websecure]
+  ingressClassName: traefik-edge
+  routes:
+    - match: Host(`langfuse.e-dani.com`)
+      kind: Rule
+      services:
+        - name: langfuse-web
+          port: 3000
+      middlewares:
+        - name: sso-chain
+          namespace: keycloak
+  tls:
+    store: { name: default, namespace: traefik-edge }
