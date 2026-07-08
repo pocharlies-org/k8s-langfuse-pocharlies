@@ -45,6 +45,21 @@ langfuse:
     secret:
       secretKeyRef: { name: langfuse-secrets, key: nextauth-secret }
 
+  # Keycloak OIDC single sign-on (realm edani). Renders AUTH_KEYCLOAK_* env.
+  # allowAccountLinking: link the Keycloak identity (email me@e-dani.com, verified)
+  # to the existing head-less init user by email, so org/project/role are retained.
+  # PHASE 1: username/password login is KEPT (disableUsernamePassword NOT set) so a
+  # failed OIDC login can't lock anyone out. PHASE 2 (after verifying SSO works) adds
+  # `disableUsernamePassword: true` under `auth:` to make it SSO-only.
+  auth:
+    providers:
+      keycloak:
+        clientId: langfuse
+        clientSecret:
+          secretKeyRef: { name: langfuse-secrets, key: keycloak-client-secret }
+        issuer: https://auth-next.e-dani.com/realms/edani
+        allowAccountLinking: true
+
   # Keep Langfuse off the ARM/GPU-scheduling nodes, in line with the app tier.
   nodeSelector:
     kubernetes.io/arch: amd64
