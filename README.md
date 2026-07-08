@@ -15,9 +15,14 @@ k8s/
   values.yaml                     # Helm values ($values/k8s/values.yaml)
   platform/                       # applied as raw manifests (path: k8s/platform)
     externalsecret.yaml           # langfuse-secrets  <- Vault secret/langfuse
-    ingressroute.yaml             # langfuse.e-dani.com behind Keycloak SSO
     networkpolicy.yaml            # default-deny ingress + allow cluster/tailscale
 ```
+
+The public UI route is NOT here: the traefik-edge DaemonSet only watches an explicit
+namespace allowlist, so `langfuse.e-dani.com` is exposed via a central IngressRoute in the
+`traefik-edge` namespace, following the harbor/firecrawl/serpientetool convention —
+`k8s-infra-pocharlies/networking/traefik-edge/langfuse-public.yaml` (cross-ns ref to
+`langfuse-web@langfuse` + `sso-chain` middleware).
 
 ## Arquitectura / backing stores
 
