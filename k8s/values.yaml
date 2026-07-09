@@ -69,6 +69,14 @@ langfuse:
   additionalEnv:
     - name: NODE_OPTIONS
       value: "--max-old-space-size=2048"
+    # Evaluator create-time preflight runs a synchronous structured-output call using
+    # json_schema-strict for openai-adapter LLM connections; against the on-prem reasoning
+    # model over vLLM this stalls ~50s (guided decoding) -> the 120s runtime cap fires ->
+    # HTTP 422 evaluator_preflight_failed, blocking evaluator creation. Skip the create-time
+    # model-call validation. SAFE: evaluation-rules are created disabled and only execute a
+    # model call when a rule is enabled (a separate, gated step). Reversible: remove to restore.
+    - name: LANGFUSE_SKIP_EVALUATOR_MODEL_CALL_VALIDATION
+      value: "true"
 
   web:
     replicas: 1
@@ -98,6 +106,11 @@ langfuse:
           value: "Dani"
         - name: LANGFUSE_INIT_USER_PASSWORD
           valueFrom: { secretKeyRef: { name: langfuse-secrets, key: init-user-password } }
+        # Instance-admin API key -> enables the headless admin API (/api/admin/organizations*)
+        # for RBAC / org / membership / org-scoped-apiKey management via Bearer auth. From Vault
+        # via ESO (key admin-api-key). Keep secret-scoped; never log. Served by the web pod.
+        - name: ADMIN_API_KEY
+          valueFrom: { secretKeyRef: { name: langfuse-secrets, key: admin-api-key } }
 
   worker:
     replicas: 1
