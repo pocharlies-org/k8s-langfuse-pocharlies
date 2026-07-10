@@ -1,0 +1,90 @@
+---
+# Langfuse trace retention (30d). OSS carece de retención nativa (es EE-gated), así que
+# un CronJob diario borra las trazas más antiguas que RETENTION_DAYS vía el API público.
+# El borrado CASCADEA: elimina observations/scores en ClickHouse y los blobs S3 (MinIO).
+# Idempotente: primero COLECTA todos los ids expirados (paginando por número de página),
+# luego borra en lotes — evita el problema de borrar-mientras-paginas.
+# Motivo PII: content-logging está ON → los mensajes de cliente viven en las trazas; cap 30d.
+# (El otro store de PII, spend-logs de litellm, ya se auto-purga a 30d en su config.)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: langfuse-retention-script
+  namespace: langfuse
+data:
+  retention.js: |
+    const HOST = process.env.LANGFUSE_HOST || 'http://langfuse-web:3000';
+    const DAYS = parseInt(process.env.RETENTION_DAYS || '30', 10);
+    const DRY = process.env.DRY_RUN === 'true';
+    const auth = 'Basic ' + Buffer.from(process.env.PK + ':' + process.env.SK).toString('base64');
+    const H = { Authorization: auth, 'Content-Type': 'application/json' };
+    const cutoff = new Date(Date.now() - DAYS * 86400000).toISOString();
+    const MAX_PAGES = 2000; // tope de seguridad ~200k trazas/ejecución
+    (async () => {
+      const ids = [];
+      for (let page = 1; page <= MAX_PAGES; page++) {
+        const r = await fetch(`${HOST}/api/public/traces?toTimestamp=${encodeURIComponent(cutoff)}&limit=100&page=${page}`, { headers: H });
+        if (!r.ok) { console.error('list failed', r.status, await r.text()); process.exit(1); }
+        const j = await r.json();
+        const batch = (j.data || []).map(t => t.id);
+        if (!batch.length) break;
+        ids.push(...batch);
+        if (page === MAX_PAGES) console.warn('MAX_PAGES cap alcanzado; quedan trazas para la próxima ejecución');
+      }
+      console.log(`cutoff=${cutoff} days=${DAYS} expired=${ids.length} dryRun=${DRY}`);
+      if (DRY || !ids.length) { console.log('nada que borrar (dry o vacío)'); return; }
+      let deleted = 0;
+      for (let i = 0; i < ids.length; i += 100) {
+        const chunk = ids.slice(i, i + 100);
+        const d = await fetch(`${HOST}/api/public/traces`, { method: 'DELETE', headers: H, body: JSON.stringify({ traceIds: chunk }) });
+        if (!d.ok) { console.error('delete failed', d.status, await d.text()); process.exit(1); }
+        deleted += chunk.length;
+      }
+      console.log(`retention done: deleted=${deleted}`);
+    })().catch(e => { console.error('ERR', e && e.message); process.exit(1); });
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: langfuse-retention
+  namespace: langfuse
+spec:
+  schedule: "0 4 * * *"        # diario 04:00 UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 1800
+      template:
+        metadata:
+          labels:
+            app: retention        # coincide con la NetworkPolicy egress interna del ns
+        spec:
+          restartPolicy: Never
+          nodeSelector:
+            kubernetes.io/arch: amd64
+          containers:
+            - name: retention
+              image: langfuse/langfuse:3.205.1   # trae node20 (global fetch); script solo usa built-ins
+              command: ["node", "/scripts/retention.js"]
+              env:
+                - name: LANGFUSE_HOST
+                  value: "http://langfuse-web:3000"
+                - name: RETENTION_DAYS
+                  value: "30"
+                - name: PK
+                  valueFrom: { secretKeyRef: { name: langfuse-secrets, key: init-project-public-key } }
+                - name: SK
+                  valueFrom: { secretKeyRef: { name: langfuse-secrets, key: init-project-secret-key } }
+              resources:
+                requests: { cpu: 50m, memory: 128Mi }
+                limits: { memory: 512Mi }
+              volumeMounts:
+                - name: script
+                  mountPath: /scripts
+          volumes:
+            - name: script
+              configMap:
+                name: langfuse-retention-script
