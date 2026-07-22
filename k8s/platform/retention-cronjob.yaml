@@ -107,15 +107,15 @@ data:
     ALTER TABLE default.dataset_run_items MODIFY TTL toDateTime(created_at) + toIntervalHour(48);
     ALTER TABLE default.dataset_run_items_rmt MODIFY TTL toDateTime(created_at) + toIntervalHour(48);
     ALTER TABLE default.event_log MODIFY TTL toDateTime(created_at) + toIntervalHour(48);
-    ALTER TABLE IF EXISTS system.asynchronous_metric_log MODIFY TTL event_date + toIntervalDay(2);
-    ALTER TABLE IF EXISTS system.error_log MODIFY TTL event_date + toIntervalDay(2);
-    ALTER TABLE IF EXISTS system.metric_log MODIFY TTL event_date + toIntervalDay(2);
-    ALTER TABLE IF EXISTS system.opentelemetry_span_log MODIFY TTL finish_date + toIntervalDay(2);
-    ALTER TABLE IF EXISTS system.part_log MODIFY TTL event_date + toIntervalDay(2);
-    ALTER TABLE IF EXISTS system.processors_profile_log MODIFY TTL event_date + toIntervalDay(2);
-    ALTER TABLE IF EXISTS system.query_log MODIFY TTL event_date + toIntervalDay(2);
-    ALTER TABLE IF EXISTS system.text_log MODIFY TTL event_date + toIntervalDay(2);
-    ALTER TABLE IF EXISTS system.trace_log MODIFY TTL event_date + toIntervalDay(2);
+    ALTER TABLE system.asynchronous_metric_log MODIFY TTL event_date + toIntervalDay(2);
+    ALTER TABLE system.error_log MODIFY TTL event_date + toIntervalDay(2);
+    ALTER TABLE system.metric_log MODIFY TTL event_date + toIntervalDay(2);
+    ALTER TABLE system.opentelemetry_span_log MODIFY TTL finish_date + toIntervalDay(2);
+    ALTER TABLE system.part_log MODIFY TTL event_date + toIntervalDay(2);
+    ALTER TABLE system.processors_profile_log MODIFY TTL event_date + toIntervalDay(2);
+    ALTER TABLE system.query_log MODIFY TTL event_date + toIntervalDay(2);
+    ALTER TABLE system.text_log MODIFY TTL event_date + toIntervalDay(2);
+    ALTER TABLE system.trace_log MODIFY TTL event_date + toIntervalDay(2);
 ---
 apiVersion: batch/v1
 kind: CronJob
