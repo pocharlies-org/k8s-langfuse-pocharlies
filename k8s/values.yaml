@@ -167,7 +167,41 @@ clickhouse:
     autoMigrate: true
   persistence:
     storageClass: longhorn
-    size: 20Gi
+    # Expanded from 20Gi after ClickHouse system.trace_log exhausted the PVC.
+    # Kubernetes PVCs cannot be shrunk in place; 22Gi is the bound size.
+    size: 22Gi
+  # Bound ClickHouse's own diagnostic tables independently of Langfuse data.
+  # The chart mounts this under config.d and ClickHouse merges it at startup.
+  extraOverrides: |
+    <clickhouse>
+      <asynchronous_metric_log>
+        <ttl>event_date + INTERVAL 2 DAY</ttl>
+      </asynchronous_metric_log>
+      <error_log>
+        <ttl>event_date + INTERVAL 2 DAY</ttl>
+      </error_log>
+      <metric_log>
+        <ttl>event_date + INTERVAL 2 DAY</ttl>
+      </metric_log>
+      <opentelemetry_span_log>
+        <ttl>finish_date + INTERVAL 2 DAY</ttl>
+      </opentelemetry_span_log>
+      <part_log>
+        <ttl>event_date + INTERVAL 2 DAY</ttl>
+      </part_log>
+      <processors_profile_log>
+        <ttl>event_date + INTERVAL 2 DAY</ttl>
+      </processors_profile_log>
+      <query_log>
+        <ttl>event_date + INTERVAL 2 DAY</ttl>
+      </query_log>
+      <text_log>
+        <ttl>event_date + INTERVAL 2 DAY</ttl>
+      </text_log>
+      <trace_log>
+        <ttl>event_date + INTERVAL 2 DAY</ttl>
+      </trace_log>
+    </clickhouse>
   nodeSelector:
     kubernetes.io/arch: amd64
 
