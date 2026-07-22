@@ -1,10 +1,10 @@
 ---
-# Langfuse trace retention (30d). OSS carece de retención nativa (es EE-gated), así que
+# Langfuse trace retention (48h). OSS carece de retención nativa (es EE-gated), así que
 # un CronJob diario borra las trazas más antiguas que RETENTION_DAYS vía el API público.
 # El borrado CASCADEA: elimina observations/scores en ClickHouse y los blobs S3 (MinIO).
 # Idempotente: primero COLECTA todos los ids expirados (paginando por número de página),
 # luego borra en lotes — evita el problema de borrar-mientras-paginas.
-# Motivo PII: content-logging está ON → los mensajes de cliente viven en las trazas; cap 30d.
+# Motivo PII: content-logging está ON → los mensajes de cliente viven en las trazas; cap 48h.
 # (El otro store de PII, spend-logs de litellm, ya se auto-purga a 30d en su config.)
 apiVersion: v1
 kind: ConfigMap
@@ -14,7 +14,7 @@ metadata:
 data:
   retention.js: |
     const HOST = process.env.LANGFUSE_HOST || 'http://langfuse-web:3000';
-    const DAYS = parseInt(process.env.RETENTION_DAYS || '30', 10);
+    const DAYS = parseInt(process.env.RETENTION_DAYS || '2', 10);
     const DRY = process.env.DRY_RUN === 'true';
     const auth = 'Basic ' + Buffer.from(process.env.PK + ':' + process.env.SK).toString('base64');
     const H = { Authorization: auth, 'Content-Type': 'application/json' };
@@ -51,8 +51,8 @@ metadata:
 spec:
   schedule: "0 4 * * *"        # diario 04:00 UTC
   concurrencyPolicy: Forbid
-  successfulJobsHistoryLimit: 3
-  failedJobsHistoryLimit: 3
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
   jobTemplate:
     spec:
       backoffLimit: 1
@@ -73,7 +73,7 @@ spec:
                 - name: LANGFUSE_HOST
                   value: "http://langfuse-web:3000"
                 - name: RETENTION_DAYS
-                  value: "30"
+                  value: "2"
                 - name: PK
                   valueFrom: { secretKeyRef: { name: langfuse-secrets, key: init-project-public-key } }
                 - name: SK
@@ -88,3 +88,76 @@ spec:
             - name: script
               configMap:
                 name: langfuse-retention-script
+---
+# Langfuse migrations own these tables and may replace their DDL. Re-apply the
+# 48-hour TTL daily so a chart/app upgrade cannot silently restore unlimited
+# history. The API retention job above remains responsible for cascade deletion
+# of associated object-store blobs.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: langfuse-clickhouse-retention-sql
+  namespace: langfuse
+data:
+  retention.sql: |
+    ALTER TABLE default.observations MODIFY TTL toDateTime(start_time) + toIntervalHour(48);
+    ALTER TABLE default.traces MODIFY TTL toDateTime(timestamp) + toIntervalHour(48);
+    ALTER TABLE default.scores MODIFY TTL toDateTime(timestamp) + toIntervalHour(48);
+    ALTER TABLE default.blob_storage_file_log MODIFY TTL toDateTime(created_at) + toIntervalHour(48);
+    ALTER TABLE default.dataset_run_items MODIFY TTL toDateTime(created_at) + toIntervalHour(48);
+    ALTER TABLE default.dataset_run_items_rmt MODIFY TTL toDateTime(created_at) + toIntervalHour(48);
+    ALTER TABLE default.event_log MODIFY TTL toDateTime(created_at) + toIntervalHour(48);
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: langfuse-clickhouse-retention
+  namespace: langfuse
+spec:
+  schedule: "30 3 * * *"
+  timeZone: "Etc/UTC"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 600
+      template:
+        metadata:
+          labels:
+            app: retention
+        spec:
+          restartPolicy: Never
+          nodeSelector:
+            kubernetes.io/arch: amd64
+          containers:
+            - name: clickhouse-retention
+              image: docker.io/bitnamilegacy/clickhouse:25.2.1-debian-12-r0
+              command: ["/bin/bash", "-ec"]
+              args:
+                - >-
+                  clickhouse-client
+                  --host langfuse-clickhouse
+                  --user "$CLICKHOUSE_USER"
+                  --password "$CLICKHOUSE_PASSWORD"
+                  --multiquery < /scripts/retention.sql
+              env:
+                - name: CLICKHOUSE_USER
+                  value: "default"
+                - name: CLICKHOUSE_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: langfuse-secrets
+                      key: clickhouse-password
+              resources:
+                requests: { cpu: 25m, memory: 64Mi }
+                limits: { memory: 256Mi }
+              volumeMounts:
+                - name: script
+                  mountPath: /scripts
+                  readOnly: true
+          volumes:
+            - name: script
+              configMap:
+                name: langfuse-clickhouse-retention-sql
