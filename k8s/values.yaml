@@ -77,6 +77,17 @@ langfuse:
     # model call when a rule is enabled (a separate, gated step). Reversible: remove to restore.
     - name: LANGFUSE_SKIP_EVALUATOR_MODEL_CALL_VALIDATION
       value: "true"
+    # DATABASE_ARGS lo concatena el entrypoint a la DATABASE_URL que construye a
+    # partir de DATABASE_HOST/USERNAME/PASSWORD/NAME (web/entrypoint.sh), y solo
+    # cuando DATABASE_URL no viene puesta — que es nuestro caso.
+    # Sin connection_limit Prisma dimensiona el pool con `cpus_fisicos * 2 + 1`
+    # leído del HOST, no del límite del contenedor: web + worker mantenían 34
+    # conexiones ociosas en postgres-shared (el 3er consumidor) con 0 activas.
+    # 5 por proceso deja 10 en régimen normal y 20 durante el rolling update.
+    # DIRECT_URL hereda esta misma URL, así que las migraciones Prisma del
+    # arranque siguen yendo al endpoint directo -rw, no a ningún pooler.
+    - name: DATABASE_ARGS
+      value: "connection_limit=5&pool_timeout=15&connect_timeout=10&application_name=langfuse"
 
   web:
     replicas: 1
