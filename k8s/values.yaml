@@ -169,7 +169,25 @@ clickhouse:
   shards: 1
   zookeeper:
     enabled: false
-  resourcesPreset: large   # req cpu1/mem2Gi, lim cpu1.5/mem3Gi. Tune under load.
+  # 2026-08-02: era `resourcesPreset: large` (lim mem 3Gi -> ClickHouse se
+  # autolimita a 2.70 GiB). Con eso, /api/public/traces devolvia 422 y el CronJob
+  # langfuse-retention llevaba sin completar desde el 26-07. El mensaje de la API
+  # ("Request timed out") es enganoso: por debajo era
+  #   MEMORY_LIMIT_EXCEEDED ... OvercommitTracker decision: Query was selected to stop
+  #   while reading column `input` in table default.traces
+  # Son trazas de LiteLLM (prompts enteros), filas muy gordas. NO se arregla
+  # bajando el tamano de pagina: medido, limit=100 y 50 pasan, 20 falla y 10 pasa
+  # — el OvercommitTracker mata la consulta que este corriendo cuando la memoria
+  # TOTAL se agota, no la que sea mas grande.
+  # Solo se sube memoria; la CPU se deja igual porque ks5-cp-3 va al 78%.
+  resources:
+    requests:
+      cpu: "1"
+      memory: 2Gi
+    limits:
+      cpu: 1500m
+      memory: 8Gi
+      ephemeral-storage: 2Gi
   auth:
     username: default
     existingSecret: langfuse-secrets
