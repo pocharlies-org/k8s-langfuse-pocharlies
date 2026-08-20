@@ -20,11 +20,38 @@ data:
     const H = { Authorization: auth, 'Content-Type': 'application/json' };
     const cutoff = new Date(Date.now() - DAYS * 86400000).toISOString();
     const MAX_PAGES = 2000; // tope de seguridad ~200k trazas/ejecución
+    let operation = { stage: 'list', page: 0 };
+    const redact = value => {
+      let text = String(value);
+      for (const secret of [process.env.PK, process.env.SK, auth, HOST]) {
+        if (secret) text = text.split(secret).join('[REDACTED]');
+      }
+      return text
+        .replace(/https?:\/\/\S+/gi, '[REDACTED_URL]')
+        .replace(/\b[0-9a-f]{8}-[0-9a-f-]{27,}\b/gi, '[REDACTED_ID]')
+        .replace(/\b[0-9a-f]{32,}\b/gi, '[REDACTED_ID]');
+    };
+    const errorDetails = e => {
+      const details = {
+        ...operation,
+        name: redact(e && e.name || 'Error'),
+        message: redact(e && e.message || 'Unknown fetch error'),
+      };
+      const cause = e && e.cause;
+      if (cause && typeof cause === 'object') {
+        details.cause = {};
+        for (const key of ['code', 'errno', 'syscall', 'address', 'port']) {
+          if (cause[key] !== undefined) details.cause[key] = redact(cause[key]);
+        }
+      }
+      return details;
+    };
     (async () => {
       const ids = [];
       for (let page = 1; page <= MAX_PAGES; page++) {
+        operation = { stage: 'list', page };
         const r = await fetch(`${HOST}/api/public/traces?toTimestamp=${encodeURIComponent(cutoff)}&limit=100&page=${page}`, { headers: H });
-        if (!r.ok) { console.error('list failed', r.status, await r.text()); process.exit(1); }
+        if (!r.ok) throw Object.assign(new Error(`HTTP ${r.status}`), { name: 'FetchResponseError' });
         const j = await r.json();
         const batch = (j.data || []).map(t => t.id);
         if (!batch.length) break;
@@ -36,12 +63,13 @@ data:
       let deleted = 0;
       for (let i = 0; i < ids.length; i += 100) {
         const chunk = ids.slice(i, i + 100);
+        operation = { stage: 'delete', chunk: Math.floor(i / 100) + 1 };
         const d = await fetch(`${HOST}/api/public/traces`, { method: 'DELETE', headers: H, body: JSON.stringify({ traceIds: chunk }) });
-        if (!d.ok) { console.error('delete failed', d.status, await d.text()); process.exit(1); }
+        if (!d.ok) throw Object.assign(new Error(`HTTP ${d.status}`), { name: 'FetchResponseError' });
         deleted += chunk.length;
       }
       console.log(`retention done: deleted=${deleted}`);
-    })().catch(e => { console.error('ERR', e && e.message); process.exit(1); });
+    })().catch(e => { console.error('retention fetch failed', JSON.stringify(errorDetails(e))); process.exit(1); });
 ---
 apiVersion: batch/v1
 kind: CronJob
