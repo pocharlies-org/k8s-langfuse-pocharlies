@@ -128,6 +128,18 @@ metadata:
   namespace: langfuse
 data:
   retention.sql: |
+    -- materialize_ttl_after_modify=0: por defecto ClickHouse re-materializa
+    -- TODAS las partes en cada MODIFY TTL, aunque el TTL no haya cambiado. Como
+    -- este job re-declara los mismos 16 TTL cada noche, eso son 16 mutaciones
+    -- completas diarias para nada. El 21-08-2026 la de system.metric_log (~1000
+    -- columnas) se comio el limite de 7,20 GiB del servidor:
+    --   Code: 341 ... reason: Code: 241 (total) memory limit exceeded
+    -- y dejo a ClickHouse tan ahogado que media hora despues langfuse-retention
+    -- moria con UND_ERR_SOCKET al paginar /api/public/traces. Dos tarjetas rojas,
+    -- un solo origen. Con el SET, declarar un TTL que ya esta puesto es solo
+    -- metadato: 0 mutaciones nuevas (medido). El borrado real lo sigue haciendo
+    -- ClickHouse en los merges de fondo, que es como funciona TTL.
+    SET materialize_ttl_after_modify = 0;
     ALTER TABLE default.observations MODIFY TTL toDateTime(start_time) + toIntervalHour(48);
     ALTER TABLE default.traces MODIFY TTL toDateTime(timestamp) + toIntervalHour(48);
     ALTER TABLE default.scores MODIFY TTL toDateTime(timestamp) + toIntervalHour(48);
