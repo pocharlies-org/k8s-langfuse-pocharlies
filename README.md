@@ -16,7 +16,7 @@ k8s/
   platform/                       # applied as raw manifests (path: k8s/platform)
     externalsecret.yaml           # langfuse-secrets  <- Vault secret/langfuse
     networkpolicy.yaml            # default-deny ingress + allow cluster/tailscale
-    ingressroute-lan.yaml         # langfuse.lan.e-dani.com via traefik-lan (LAN, no SSO)
+    ingressroute-lan.yaml         # langfuse.e-dani.com via traefik-lan (LAN, no SSO)
 ```
 
 The public UI route is NOT here: the traefik-edge DaemonSet only watches an explicit
@@ -108,7 +108,7 @@ loki-chunks, longhorn-backups). The bucket itself is created by
 - **UI:** https://langfuse.e-dani.com — gated by Keycloak SSO (oauth2-proxy), then the
   Langfuse login (email `INIT_USER_EMAIL` + `INIT_USER_PASSWORD`). Public signup is
   disabled.
-- **LAN:** https://langfuse.lan.e-dani.com — via traefik-lan (internal LB 192.168.50.240),
+- **LAN:** https://langfuse.e-dani.com — via traefik-lan (internal LB 192.168.50.240),
   no Keycloak SSO layer; the Langfuse login is the auth. Route: `k8s/platform/ingressroute-lan.yaml`.
 - **Internal ingest (LiteLLM → Langfuse):** `http://langfuse-web.langfuse.svc.cluster.local:3000`
   (no SSO on the internal service; NetworkPolicy limits it to the cluster overlay).
@@ -126,7 +126,7 @@ kubectl -n langfuse logs deploy/langfuse-web | grep -iE 'migrat|listening|ready'
 # 2) health
 kubectl -n langfuse exec deploy/langfuse-web -- wget -qO- localhost:3000/api/public/ready
 # 3) fire a LiteLLM call with useful metadata/tags
-curl -sS https://litellm.lan.e-dani.com/v1/chat/completions \
+curl -sS https://litellm.e-dani.com/v1/chat/completions \
   -H "Authorization: Bearer $LITELLM_KEY" -H 'Content-Type: application/json' \
   -d '{"model":"qwen36-35b",
        "messages":[{"role":"user","content":"langfuse smoke test"}],
