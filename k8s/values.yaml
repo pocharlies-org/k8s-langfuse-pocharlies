@@ -11,7 +11,8 @@
 #   - ClickHouse  -> DEDICATED (chart-bundled), single node — required by v3, no in-cluster CH existed.
 #
 # All secrets come from the k8s Secret `langfuse-secrets`, materialised by the
-# ExternalSecret in k8s/platform/externalsecret.yaml (Vault path `secret/langfuse`).
+# ExternalSecret in k8s/platform/externalsecret.yaml (1Password item `langfuse`,
+# vault `k8s-pocharlies`).
 # NOTHING sensitive is stored in this file.
 
 global:
