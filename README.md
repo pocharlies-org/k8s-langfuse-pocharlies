@@ -14,7 +14,7 @@ the `values.yaml` and platform manifests in this repo.
 k8s/
   values.yaml                     # Helm values ($values/k8s/values.yaml)
   platform/                       # applied as raw manifests (path: k8s/platform)
-    externalsecret.yaml           # langfuse-secrets  <- Vault secret/langfuse
+    externalsecret.yaml           # langfuse-secrets  <- 1Password item langfuse
     networkpolicy.yaml            # default-deny ingress + allow cluster/tailscale
     ingressroute-lan.yaml         # langfuse.e-dani.com via traefik-lan (LAN, no SSO)
 ```
@@ -41,12 +41,13 @@ A dedicated standalone Valkey isolates the queue and keeps the whole deploy GitO
 (To switch to shared-valkey later: set `redis.deploy:false` + `redis.sentinel.*` in
 `values.yaml` and add a langfuse ACL user to `shared-valkey-acl` — see Rollback.)
 
-## Secretos (Vault, sin texto plano en Git)
+## Secretos (1Password, sin texto plano en Git)
 
-All secrets live in Vault under the KV-v2 mount `secret`. Two paths, materialised by
-ExternalSecrets via the `vault-backend` ClusterSecretStore. **Seed them before syncing.**
-(KV v2 mount `secret`; the ExternalSecret `key: secret/langfuse` reads exactly what
-`vault kv put secret/langfuse` writes — same convention as the existing `secret/litellm`.)
+All secrets live in the 1Password vault `k8s-pocharlies` as items, materialised by
+ExternalSecrets via the `onepassword` ClusterSecretStore. **Seed them before syncing.**
+(The ExternalSecret `key: langfuse/SALT` reads exactly the field `SALT` of the item
+`langfuse` — same item/field convention as the existing `litellm` item. Until SC-490
+these lived in Vault under the KV-v2 mount `secret`.)
 
 Generate the crypto material:
 ```bash
@@ -57,9 +58,9 @@ PROJECT_PUBLIC_KEY="pk-lf-$(openssl rand -hex 16)"
 PROJECT_SECRET_KEY="sk-lf-$(openssl rand -hex 16)"
 ```
 
-`secret/langfuse` (app + CNPG role + MinIO creds + head-less bootstrap):
+item `langfuse` (app + CNPG role + MinIO creds + head-less bootstrap):
 ```bash
-vault kv put secret/langfuse \
+op item edit langfuse --vault=k8s-pocharlies \
   SALT="$SALT" ENCRYPTION_KEY="$ENCRYPTION_KEY" NEXTAUTH_SECRET="$NEXTAUTH_SECRET" \
   DB_USER=langfuse DB_PASSWORD="$(openssl rand -base64 36 | tr -dc 'A-Za-z0-9' | head -c 32)" \
   REDIS_PASSWORD="$(openssl rand -base64 36 | tr -dc 'A-Za-z0-9' | head -c 32)" \
@@ -72,9 +73,9 @@ vault kv put secret/langfuse \
   INIT_USER_PASSWORD="<admin login password>"
 ```
 
-`secret/litellm` (add the SAME project keys so LiteLLM logs into this project):
+item `litellm` (add the SAME project keys so LiteLLM logs into this project):
 ```bash
-vault kv patch secret/litellm \
+op item edit litellm --vault=k8s-pocharlies \
   LANGFUSE_PUBLIC_KEY="$PROJECT_PUBLIC_KEY" \
   LANGFUSE_SECRET_KEY="$PROJECT_SECRET_KEY"
 ```
@@ -90,7 +91,7 @@ loki-chunks, longhorn-backups). The bucket itself is created by
 
 1. **Create the GitHub repo** `pocharlies-org/k8s-langfuse-pocharlies`, push this tree,
    create branch **`deploy/prod`** (that's the `targetRevision`).
-2. **Seed Vault** (`secret/langfuse` + `secret/litellm` keys above).
+2. **Seed 1Password** (item `langfuse` + `litellm` keys above).
 3. **Merge/sync `k8s-infra-pocharlies`** first (adds the `langfuse` CNPG role + `langfuse`
    Database + `langfuse-db-credentials` ESO + the MinIO `langfuse` bucket). Wait for the
    `k8s-infra` app to be Synced/Healthy so the DB + bucket exist.
@@ -172,8 +173,8 @@ three `LANGFUSE_*` env vars; sync litellm.
    storage back: `kubectl -n langfuse delete pvc -l app.kubernetes.io/instance=langfuse`.
 4. Optional: drop the `langfuse` CNPG `Database`/role and `langfuse-db-credentials` ESO
    from `k8s-infra-pocharlies`, and the `langfuse` MinIO bucket line.
-5. Optional: `vault kv delete secret/langfuse` and remove the two LANGFUSE_* keys
-   from `secret/litellm`.
+5. Optional: `op item delete langfuse --vault=k8s-pocharlies` and remove the two
+   LANGFUSE_* keys from the `litellm` item.
 
 ## Gotchas
 
