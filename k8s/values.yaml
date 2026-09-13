@@ -93,7 +93,8 @@ langfuse:
   web:
     replicas: 1
     resources:
-      requests: { cpu: 200m, memory: 1Gi }
+      # 13-09-2026 (INFRA-42): p95 medido 57m. Request 200m→100m; límites sin cambios.
+      requests: { cpu: 100m, memory: 1Gi }
       limits:   { memory: 2Gi }
     pod:
       # Headless bootstrap: idempotent by ID — creates org/project/user on first
