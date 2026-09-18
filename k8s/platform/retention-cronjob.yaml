@@ -19,7 +19,7 @@ data:
     const auth = 'Basic ' + Buffer.from(process.env.PK + ':' + process.env.SK).toString('base64');
     const H = { Authorization: auth, 'Content-Type': 'application/json' };
     const cutoff = new Date(Date.now() - DAYS * 86400000).toISOString();
-    const MAX_PAGES = 2000; // tope de seguridad ~200k trazas/ejecución
+    const MAX_PAGES = 2000; // tope de seguridad ~40k trazas/ejecución (2000×20)
     let operation = { stage: 'list', page: 0 };
     const redact = value => {
       let text = String(value);
@@ -46,11 +46,48 @@ data:
       }
       return details;
     };
+    // SCOLD-639: el 16/17-09 el run diario murió en stage=list page=5 con
+    // UND_ERR_SOCKET (reset transitorio del socket contra langfuse-web). Sin
+    // retry, un solo reset tiraba toda la ejecución. Retry con backoff
+    // exponencial para errores de red y 408/429/5xx; timeout por petición
+    // para que un socket colgado no coma el activeDeadlineSeconds entero.
+    // RETRIES=6 con backoff 2·2^n (2,4,8,16,32s ≈ 62s de espera acumulada):
+    // medido el 18-09 — langfuse-web sufre OOMKills (exit 137, límite 2Gi) y
+    // tarda ~2 min en volver a servir; con backoffs de ~8s totales el run
+    // moraba igual. El borrado es idempotente, así que aguantar el reinicio
+    // sale gratis. El OOM del web va en issue aparte.
+    const RETRIES = 6;
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    const fetchRetry = async (label, url, opts = {}) => {
+      let lastErr;
+      for (let attempt = 1; attempt <= RETRIES; attempt++) {
+        try {
+          const r = await fetch(url, { ...opts, signal: AbortSignal.timeout(30000) });
+          if (r.ok || (r.status < 500 && r.status !== 429 && r.status !== 408)) return r;
+          lastErr = Object.assign(new Error(`HTTP ${r.status}`), { name: 'FetchResponseError' });
+        } catch (e) {
+          lastErr = e;
+        }
+        if (attempt < RETRIES) {
+          const backoff = Math.min(60000, 2000 * 2 ** (attempt - 1)) + Math.floor(Math.random() * 500);
+          console.warn(`retry ${label} ${attempt}/${RETRIES}: ${redact(lastErr.message)}`);
+          await sleep(backoff);
+        }
+      }
+      throw lastErr;
+    };
     (async () => {
       const ids = [];
+      // limit=20, no 100: /api/public/traces devuelve el input/output COMPLETO
+      // de cada traza (trazas de litellm = prompts enteros de varios MB). Medido
+      // el 18-09: una página de 100 pinchaba +630 MiB en langfuse-web en 2 s
+      // (471→1101 MiB) y, con la baseline de ~1 GiB que acumula el día, eso
+      // cruzaba el límite de 2 Gi → OOMKill (exit 137) → el propio retention se
+      // quedaba sin web a media paginación (UND_ERR_SOCKET en page=5 los días
+      // 16 y 17-09). Con limit=20 el mismo query responde en 7 s sin pinchazo.
       for (let page = 1; page <= MAX_PAGES; page++) {
         operation = { stage: 'list', page };
-        const r = await fetch(`${HOST}/api/public/traces?toTimestamp=${encodeURIComponent(cutoff)}&limit=100&page=${page}`, { headers: H });
+        const r = await fetchRetry(`list page=${page}`, `${HOST}/api/public/traces?toTimestamp=${encodeURIComponent(cutoff)}&limit=20&page=${page}`, { headers: H });
         if (!r.ok) throw Object.assign(new Error(`HTTP ${r.status}`), { name: 'FetchResponseError' });
         const j = await r.json();
         const batch = (j.data || []).map(t => t.id);
@@ -64,7 +101,7 @@ data:
       for (let i = 0; i < ids.length; i += 100) {
         const chunk = ids.slice(i, i + 100);
         operation = { stage: 'delete', chunk: Math.floor(i / 100) + 1 };
-        const d = await fetch(`${HOST}/api/public/traces`, { method: 'DELETE', headers: H, body: JSON.stringify({ traceIds: chunk }) });
+        const d = await fetchRetry(`delete chunk=${Math.floor(i / 100) + 1}`, `${HOST}/api/public/traces`, { method: 'DELETE', headers: H, body: JSON.stringify({ traceIds: chunk }) });
         if (!d.ok) throw Object.assign(new Error(`HTTP ${d.status}`), { name: 'FetchResponseError' });
         deleted += chunk.length;
       }
@@ -83,7 +120,7 @@ spec:
   failedJobsHistoryLimit: 1
   jobTemplate:
     spec:
-      backoffLimit: 1
+      backoffLimit: 2
       activeDeadlineSeconds: 1800
       template:
         metadata:
