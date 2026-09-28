@@ -50,7 +50,9 @@ data:
       const ids = [];
       for (let page = 1; page <= MAX_PAGES; page++) {
         operation = { stage: 'list', page };
-        const r = await fetch(`${HOST}/api/public/traces?toTimestamp=${encodeURIComponent(cutoff)}&limit=100&page=${page}`, { headers: H });
+        // fields=core: sin él, /traces serializa input/output y con ~9k trazas
+        // vencidas devuelve 422 "Request timed out" (29-09-2026). Solo hace falta el id.
+        const r = await fetch(`${HOST}/api/public/traces?fields=core&toTimestamp=${encodeURIComponent(cutoff)}&limit=100&page=${page}`, { headers: H });
         if (!r.ok) throw Object.assign(new Error(`HTTP ${r.status}`), { name: 'FetchResponseError' });
         const j = await r.json();
         const batch = (j.data || []).map(t => t.id);
