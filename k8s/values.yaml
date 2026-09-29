@@ -204,6 +204,12 @@ clickhouse:
     # se aplica en merges de fondo y con la ingesta de LiteLLM (~38k filas/24h,
     # partes de 1-2 GiB) no iba a tiempo. Kubernetes no encoge PVCs: 40Gi es la
     # talla ligada (medido: df 40G, 78% tras liberar el TTL).
+    # OJO: volumeClaimTemplates es INMUTABLE en un StatefulSet vivo. Tras
+    # cambiar esta talla hay que recrear el STS sin tocar el pod ni el PVC:
+    #   kubectl -n langfuse delete sts langfuse-clickhouse-shard0 --cascade=orphan
+    # (ArgoCD recrea el STS desde este render y adopta el pod existente).
+    # Este commit es, ademas, el trigger del reintento: ArgoCD no repite
+    # una revision que ya fallo (Skipping auto-sync: failed previous sync).
     size: 40Gi
   nodeSelector:
     kubernetes.io/arch: amd64
