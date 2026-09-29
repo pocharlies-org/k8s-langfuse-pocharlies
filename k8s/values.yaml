@@ -198,9 +198,17 @@ clickhouse:
     autoMigrate: true
   persistence:
     storageClass: longhorn
-    # Expanded from 20Gi after ClickHouse system.trace_log exhausted the PVC.
-    # Kubernetes PVCs cannot be shrunk in place; 22Gi is the bound size.
-    size: 22Gi
+    # Expanded from 20Gi after ClickHouse system.trace_log exhausted the PVC,
+    # and to 40Gi on 2026-09-29: observations (trazas gordas de LiteLLM) llena
+    # 30Gi en ~3 dias. El TTL de 48h NO lo purgaba solo porque la tabla esta
+    # particionada por MES (una unica particion 202609 que no para de recibir),
+    # asi que el drop por particion nunca se cumple y el retention re-declara
+    # el TTL con materialize_ttl_after_modify=0 (para no re-materializar 16
+    # tablas cada noche). Purga real: ALTER ... MATERIALIZE TTL manual. Aun con
+    # 40Gi el ritmo deja ~4 dias de margen; si vuelve a arder, es el TTL por
+    # fila (o particionar por dia), no el tamano.
+    # Kubernetes PVCs cannot be shrunk in place; 40Gi is the bound size.
+    size: 40Gi
   nodeSelector:
     kubernetes.io/arch: amd64
 
