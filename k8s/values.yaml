@@ -198,9 +198,13 @@ clickhouse:
     autoMigrate: true
   persistence:
     storageClass: longhorn
-    # Expanded from 20Gi after ClickHouse system.trace_log exhausted the PVC.
-    # Kubernetes PVCs cannot be shrunk in place; 22Gi is the bound size.
-    size: 22Gi
+    # Expanded 20Gi -> 22Gi (trace_log) -> 40Gi el 29-09-2026: el PVC llego al
+    # 100% y el worker de Langfuse DROPABA observations (ClickHouse code 243
+    # "Cannot reserve ... not enough space", ~500 err/min, 14:21Z). El TTL de 48h
+    # se aplica en merges de fondo y con la ingesta de LiteLLM (~38k filas/24h,
+    # partes de 1-2 GiB) no iba a tiempo. Kubernetes no encoge PVCs: 40Gi es la
+    # talla ligada (medido: df 40G, 78% tras liberar el TTL).
+    size: 40Gi
   nodeSelector:
     kubernetes.io/arch: amd64
 
