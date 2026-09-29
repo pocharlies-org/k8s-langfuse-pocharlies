@@ -158,6 +158,22 @@ data:
     ALTER TABLE system.query_log MODIFY TTL event_date + toIntervalDay(2);
     ALTER TABLE system.text_log MODIFY TTL event_date + toIntervalDay(2);
     ALTER TABLE system.trace_log MODIFY TTL event_date + toIntervalDay(2);
+
+    -- Materializar el TTL: las MODIFY TTL de arriba con
+    -- materialize_ttl_after_modify=0 son solo metadato; el borrado real lo
+    -- hacen los merges de fondo cuando les da la gana (merge_with_ttl_timeout
+    -- = 4h, y con la ingesta de LiteLLM las partes de 1-2 GiB se fusionan por
+    -- tamano antes de que llegue el turno TTL). Medido el 29-09-2026: en 7
+    -- dias de system.part_log NO hubo ni un merge con merge_reason='TTL' y
+    -- el PVC (30Gi entonces) llego al 100%: code 243 "Cannot reserve ... not
+    -- enough space", el worker dropeaba observations. OPTIMIZE FINAL fuerza el
+    -- merge con borrado TTL de las partes vencidas. Solo en las 4 tablas con
+    -- datos de usuario; las system.* se limpian solas (verificado: part_log
+    -- retiene ~14h con su TTL de 2d).
+    OPTIMIZE TABLE default.observations FINAL;
+    OPTIMIZE TABLE default.traces FINAL;
+    OPTIMIZE TABLE default.scores FINAL;
+    OPTIMIZE TABLE default.blob_storage_file_log FINAL;
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -173,7 +189,10 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 2
-      activeDeadlineSeconds: 600
+      # 30 min: desde el 29-09 el job tambien hace OPTIMIZE FINAL para
+      # materializar el TTL (medido: traces 7,5 min; observations ~15-20 min
+      # con 21 GiB). Con 600s el deadline mataba el merge a mitad.
+      activeDeadlineSeconds: 1800
       template:
         metadata:
           labels:
