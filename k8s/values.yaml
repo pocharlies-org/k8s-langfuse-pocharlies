@@ -198,19 +198,22 @@ clickhouse:
     autoMigrate: true
   persistence:
     storageClass: longhorn
-    # Expanded 20Gi -> 22Gi (trace_log) -> 40Gi el 29-09-2026: el PVC llego al
-    # 100% y el worker de Langfuse DROPABA observations (ClickHouse code 243
-    # "Cannot reserve ... not enough space", ~500 err/min, 14:21Z). El TTL de 48h
-    # se aplica en merges de fondo y con la ingesta de LiteLLM (~38k filas/24h,
-    # partes de 1-2 GiB) no iba a tiempo. Kubernetes no encoge PVCs: 40Gi es la
-    # talla ligada (medido: df 40G, 78% tras liberar el TTL).
+    # Expanded 20Gi -> 22Gi (trace_log) -> 40Gi el 29-09-2026 (worker DROPABA
+    # observations, ClickHouse code 243, ~500 err/min) -> 80Gi el 02-10-2026
+    # (SC-1613): KubePersistentVolumeFillingUp firing desde 10-02 00:27Z; 97%
+    # lleno medido con kubelet_volume_stats_available_bytes (0.94Gi libres con
+    # df dentro del pod) y bajando ~0.5Gi/h. Causa: ~79 mutaciones UPDATE
+    # _row_exists=0 pendientes en default.observations (borrados trace_delete
+    # del proyecto litellm) que no compactan a tiempo; el espacio se recupera
+    # al completarse las mutaciones pero el disco se agota antes. Kubernetes no
+    # encoge PVCs: 80Gi es la talla ligada.
     # OJO: volumeClaimTemplates es INMUTABLE en un StatefulSet vivo. Tras
     # cambiar esta talla hay que recrear el STS sin tocar el pod ni el PVC:
     #   kubectl -n langfuse delete sts langfuse-clickhouse-shard0 --cascade=orphan
     # (ArgoCD recrea el STS desde este render y adopta el pod existente).
     # Este commit es, ademas, el trigger del reintento: ArgoCD no repite
     # una revision que ya fallo (Skipping auto-sync: failed previous sync).
-    size: 40Gi
+    size: 80Gi
   nodeSelector:
     kubernetes.io/arch: amd64
 
