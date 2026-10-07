@@ -181,12 +181,12 @@ clickhouse:
   # bajando el tamano de pagina: medido, limit=100 y 50 pasan, 20 falla y 10 pasa
   # — el OvercommitTracker mata la consulta que este corriendo cuando la memoria
   # TOTAL se agota, no la que sea mas grande.
-  # Se subio memoria. Desde INFRA-628 el request de CPU baja a 300m (uso real ~276m,
-  # p95 404m, max 7d 666m; limite 1500m sin cambios) para dejar sitio al
-  # instance-manager de Longhorn v1.13 en ks5-cp-3.
+  # Se subio memoria. Desde INFRA-628 el request de CPU baja de 1000m a 600m
+  # (= 1,5x el p95 de 404m a 7d; uso medio ~276m, max 7d 666m; limite 1500m sin
+  # cambios) para dejar sitio al instance-manager de Longhorn v1.13 en ks5-cp-3.
   resources:
     requests:
-      cpu: "300m"
+      cpu: "600m"
       memory: 2Gi
     limits:
       cpu: 1500m
