@@ -231,7 +231,17 @@ s3:
     secretKeyRef: { name: langfuse-secrets, key: s3-access-key-id }
   secretAccessKey:
     secretKeyRef: { name: langfuse-secrets, key: s3-secret-access-key }
+  # INFRA-931: los eventos (~1 PUT/s, objetos pequeños) van al MinIO propio en el NVMe
+  # de ks5-cp-1 (platform/events-minio.yaml), fuera del RAID de HDD de sauvage.
   eventUpload:
+    bucket: langfuse-events
+    endpoint: http://langfuse-events-s3.langfuse.svc.cluster.local:9000
+    region: auto
+    forcePathStyle: true
+    accessKeyId:
+      secretKeyRef: { name: langfuse-secrets, key: s3-access-key-id }
+    secretAccessKey:
+      secretKeyRef: { name: langfuse-secrets, key: s3-secret-access-key }
     prefix: "events/"
   mediaUpload:
     enabled: true
