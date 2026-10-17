@@ -189,10 +189,14 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 2
-      # 30 min: desde el 29-09 el job tambien hace OPTIMIZE FINAL para
+      # 60 min: desde el 29-09 el job tambien hace OPTIMIZE FINAL para
       # materializar el TTL (medido: traces 7,5 min; observations ~15-20 min
-      # con 21 GiB). Con 600s el deadline mataba el merge a mitad.
-      activeDeadlineSeconds: 1800
+      # con 21 GiB). Con 600s el deadline mataba el merge a mitad, y con 1800s
+      # el run del 17-10-2026 supero los 30 min (SC-2585: DeadlineExceeded;
+      # el run anterior ya tardo 20 min, la ingesta de LiteLLM crece). El
+      # trabajo real (TTL metadata) acaba en ~8 s; OPTIMIZE es reclamation de
+      # disco y el merge sigue en background aunque muera el cliente.
+      activeDeadlineSeconds: 3600
       template:
         metadata:
           labels:
