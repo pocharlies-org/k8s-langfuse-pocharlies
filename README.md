@@ -30,7 +30,7 @@ namespace allowlist, so `langfuse.e-dani.com` is exposed via a central IngressRo
 | Componente  | Decisión                     | Destino |
 |-------------|------------------------------|---------|
 | PostgreSQL  | **REUSE** shared CNPG        | `postgres-shared-rw.databases.svc:5432` DB `langfuse`, role `langfuse` |
-| S3 / blob   | **REUSE** shared MinIO       | `minio-s3.minio.svc:9000` bucket `langfuse` (prefixes `events/ media/ exports/`) |
+| S3 / blob   | **REUSE** shared MinIO + own events MinIO | `minio-s3.minio.svc:9000` bucket `langfuse` (`media/ exports/`); events → `langfuse-events-s3.langfuse.svc:9000` bucket `langfuse-events` on ks5-cp-1 NVMe (INFRA-931) |
 | Redis/Valkey| **DEDICATED** (chart)        | `langfuse-redis-primary:6379` (BullMQ queue, `noeviction`) |
 | ClickHouse  | **DEDICATED** (chart, 1 node)| `langfuse-clickhouse:8123/9000` (required by v3; none existed in-cluster) |
 

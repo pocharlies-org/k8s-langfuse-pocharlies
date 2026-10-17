@@ -1,0 +1,126 @@
+# MinIO propio para los eventos de ingestión de Langfuse (INFRA-931), en el NVMe de
+# ks5-cp-1. Langfuse v3 sube a S3 cada evento que ingiere (no se puede apagar): ~1 PUT/s
+# de objetos pequeños que, en la MinIO compartida de sauvage (RAID1 de HDD), era el 70 %
+# de sus operaciones y dejaba el disco al 100 % de io_time y los push de Harbor en
+# timeout. Aquí solo va s3.eventUpload (values.yaml); media/ y exports/ siguen en la
+# compartida. Datos efímeros: el sidecar pone caducidad de 7 días (el CronJob de
+# retención borra las trazas a los 2) y el PVC es local-path sin réplica a propósito:
+# perderlo solo cuesta poder reprocesar eventos de la última semana.
+# Credenciales: la misma pareja s3-* de langfuse-secrets (1Password, item langfuse) hace
+# de root de esta instancia, que no tiene más inquilino que Langfuse.
+# sync-wave -1: ArgoCD la deja sana antes de rodar web/worker con el endpoint nuevo.
+apiVersion: v1
+kind: Service
+metadata:
+  name: langfuse-events-s3
+  namespace: langfuse
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  selector:
+    app: langfuse-events-minio
+  ports:
+    - name: s3
+      port: 9000
+      targetPort: 9000
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: langfuse-events-minio
+  namespace: langfuse
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  serviceName: langfuse-events-s3
+  replicas: 1
+  selector:
+    matchLabels:
+      app: langfuse-events-minio
+  template:
+    metadata:
+      labels:
+        app: langfuse-events-minio
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: ks5-cp-1
+      containers:
+        - name: minio
+          image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+          args: ["server", "/data"]
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef: {name: langfuse-secrets, key: s3-access-key-id}
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: langfuse-secrets, key: s3-secret-access-key}
+          ports:
+            - containerPort: 9000
+          readinessProbe:
+            httpGet: {path: /minio/health/ready, port: 9000}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /minio/health/live, port: 9000}
+            periodSeconds: 30
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 1Gi}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+        # Crea el bucket y su caducidad (idempotente) y se queda dormido: sin Job, que
+        # ArgoCD recrearía sin fin (convención de storage/minio en k8s-infra-pocharlies).
+        - name: bootstrap
+          image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+          command: ["sh", "-c"]
+          args:
+            - |
+              export MC_CONFIG_DIR=/tmp/.mc
+              until mc alias set local http://127.0.0.1:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null 2>&1; do sleep 5; done
+              mc mb --ignore-existing local/langfuse-events
+              if [ -z "$(mc ilm rule ls local/langfuse-events 2>/dev/null)" ]; then
+                mc ilm rule add --expire-days 7 local/langfuse-events
+              fi
+              mc ilm rule ls local/langfuse-events
+              exec sleep infinity
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef: {name: langfuse-secrets, key: s3-access-key-id}
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: langfuse-secrets, key: s3-secret-access-key}
+          resources:
+            requests: {cpu: 5m, memory: 16Mi}
+            limits: {memory: 64Mi}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        storageClassName: local-path
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 40Gi
+---
+# Solo web y worker de Langfuse llegan al S3 de eventos (el ns tiene default-deny).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: langfuse-events-minio
+  namespace: langfuse
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  podSelector:
+    matchLabels:
+      app: langfuse-events-minio
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - { key: app, operator: In, values: [web, worker] }
+      ports:
+        - port: 9000
+  policyTypes:
+    - Ingress
