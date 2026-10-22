@@ -1,10 +1,11 @@
 ---
-# Langfuse trace retention (48h). OSS carece de retención nativa (es EE-gated), así que
-# un CronJob diario borra las trazas más antiguas que RETENTION_DAYS vía el API público.
+# Langfuse trace retention (6h). OSS carece de retención nativa (es EE-gated), así que
+# un CronJob horario borra las trazas más antiguas que RETENTION_HOURS vía el API público.
+# El histórico es solo para depurar en vivo (Dani, 22-10): 6 h, no días.
 # El borrado CASCADEA: elimina observations/scores en ClickHouse y los blobs S3 (MinIO).
 # Idempotente: primero COLECTA todos los ids expirados (paginando por número de página),
 # luego borra en lotes — evita el problema de borrar-mientras-paginas.
-# Motivo PII: content-logging está ON → los mensajes de cliente viven en las trazas; cap 48h.
+# Motivo PII: content-logging está ON → los mensajes de cliente viven en las trazas; cap 6h.
 # (El otro store de PII, spend-logs de litellm, ya se auto-purga a 30d en su config.)
 apiVersion: v1
 kind: ConfigMap
@@ -14,11 +15,11 @@ metadata:
 data:
   retention.js: |
     const HOST = process.env.LANGFUSE_HOST || 'http://langfuse-web:3000';
-    const DAYS = parseInt(process.env.RETENTION_DAYS || '2', 10);
+    const HOURS = parseInt(process.env.RETENTION_HOURS || '6', 10);
     const DRY = process.env.DRY_RUN === 'true';
     const auth = 'Basic ' + Buffer.from(process.env.PK + ':' + process.env.SK).toString('base64');
     const H = { Authorization: auth, 'Content-Type': 'application/json' };
-    const cutoff = new Date(Date.now() - DAYS * 86400000).toISOString();
+    const cutoff = new Date(Date.now() - HOURS * 3600000).toISOString();
     const MAX_PAGES = 2000; // tope de seguridad ~200k trazas/ejecución
     let operation = { stage: 'list', page: 0 };
     const redact = value => {
@@ -60,7 +61,7 @@ data:
         ids.push(...batch);
         if (page === MAX_PAGES) console.warn('MAX_PAGES cap alcanzado; quedan trazas para la próxima ejecución');
       }
-      console.log(`cutoff=${cutoff} days=${DAYS} expired=${ids.length} dryRun=${DRY}`);
+      console.log(`cutoff=${cutoff} hours=${HOURS} expired=${ids.length} dryRun=${DRY}`);
       if (DRY || !ids.length) { console.log('nada que borrar (dry o vacío)'); return; }
       let deleted = 0;
       for (let i = 0; i < ids.length; i += 100) {
@@ -79,7 +80,7 @@ metadata:
   name: langfuse-retention
   namespace: langfuse
 spec:
-  schedule: "0 4 * * *"        # diario 04:00 UTC
+  schedule: "0 * * * *"        # cada hora: con 6 h de retención el hueco máximo es 7 h
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 1
   failedJobsHistoryLimit: 1
@@ -102,8 +103,8 @@ spec:
               env:
                 - name: LANGFUSE_HOST
                   value: "http://langfuse-web:3000"
-                - name: RETENTION_DAYS
-                  value: "2"
+                - name: RETENTION_HOURS
+                  value: "6"
                 - name: PK
                   valueFrom: { secretKeyRef: { name: langfuse-secrets, key: init-project-public-key } }
                 - name: SK
@@ -120,7 +121,7 @@ spec:
                 name: langfuse-retention-script
 ---
 # Langfuse migrations own these tables and may replace their DDL. Re-apply the
-# 48-hour TTL daily so a chart/app upgrade cannot silently restore unlimited
+# 6-hour TTL hourly so a chart/app upgrade cannot silently restore unlimited
 # history. The API retention job above remains responsible for cascade deletion
 # of associated object-store blobs.
 apiVersion: v1
@@ -142,13 +143,13 @@ data:
     -- metadato: 0 mutaciones nuevas (medido). El borrado real lo sigue haciendo
     -- ClickHouse en los merges de fondo, que es como funciona TTL.
     SET materialize_ttl_after_modify = 0;
-    ALTER TABLE default.observations MODIFY TTL toDateTime(start_time) + toIntervalHour(48);
-    ALTER TABLE default.traces MODIFY TTL toDateTime(timestamp) + toIntervalHour(48);
-    ALTER TABLE default.scores MODIFY TTL toDateTime(timestamp) + toIntervalHour(48);
-    ALTER TABLE default.blob_storage_file_log MODIFY TTL toDateTime(created_at) + toIntervalHour(48);
-    ALTER TABLE default.dataset_run_items MODIFY TTL toDateTime(created_at) + toIntervalHour(48);
-    ALTER TABLE default.dataset_run_items_rmt MODIFY TTL toDateTime(created_at) + toIntervalHour(48);
-    ALTER TABLE default.event_log MODIFY TTL toDateTime(created_at) + toIntervalHour(48);
+    ALTER TABLE default.observations MODIFY TTL toDateTime(start_time) + toIntervalHour(6);
+    ALTER TABLE default.traces MODIFY TTL toDateTime(timestamp) + toIntervalHour(6);
+    ALTER TABLE default.scores MODIFY TTL toDateTime(timestamp) + toIntervalHour(6);
+    ALTER TABLE default.blob_storage_file_log MODIFY TTL toDateTime(created_at) + toIntervalHour(6);
+    ALTER TABLE default.dataset_run_items MODIFY TTL toDateTime(created_at) + toIntervalHour(6);
+    ALTER TABLE default.dataset_run_items_rmt MODIFY TTL toDateTime(created_at) + toIntervalHour(6);
+    ALTER TABLE default.event_log MODIFY TTL toDateTime(created_at) + toIntervalHour(6);
     ALTER TABLE system.asynchronous_metric_log MODIFY TTL event_date + toIntervalDay(2);
     ALTER TABLE system.error_log MODIFY TTL event_date + toIntervalDay(2);
     ALTER TABLE system.metric_log MODIFY TTL event_date + toIntervalDay(2);
