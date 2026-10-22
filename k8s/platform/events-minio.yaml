@@ -3,9 +3,11 @@
 # de objetos pequeños que, en la MinIO compartida de sauvage (RAID1 de HDD), era el 70 %
 # de sus operaciones y dejaba el disco al 100 % de io_time y los push de Harbor en
 # timeout. Aquí solo va s3.eventUpload (values.yaml); media/ y exports/ siguen en la
-# compartida. Datos efímeros: el sidecar pone caducidad de 7 días (el CronJob de
+# compartida. Datos efímeros: el sidecar pone caducidad de 1 día (el CronJob de
 # retención borra las trazas a los 2) y el PVC es local-path sin réplica a propósito:
-# perderlo solo cuesta poder reprocesar eventos de la última semana.
+# perderlo solo cuesta poder reprocesar eventos del último día.
+# INFRA-970: con 7 días llegó a 238 G en 5 (~50 G/día) y llenó el disco raíz de cp-1
+# (local-path no aplica los 40Gi del PVC): k3s no arrancaba y el nodo cayó.
 # Credenciales: la misma pareja s3-* de langfuse-secrets (1Password, item langfuse) hace
 # de root de esta instancia, que no tiene más inquilino que Langfuse. Al rotarla hay que
 # reiniciar también este StatefulSet: el root entra como env y no se recarga en caliente
@@ -86,9 +88,10 @@ spec:
               export MC_CONFIG_DIR=/tmp/.mc
               until mc alias set local http://127.0.0.1:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null 2>&1; do sleep 5; done
               mc mb --ignore-existing local/langfuse-events
-              if [ -z "$(mc ilm rule ls local/langfuse-events 2>/dev/null)" ]; then
-                mc ilm rule add --expire-days 7 local/langfuse-events
-              fi
+              # Reescribe la regla en cada arranque: así un bucket que ya tenía otra caducidad
+              # (la de 7 días) también queda en 1.
+              mc ilm rule rm --all --force local/langfuse-events >/dev/null 2>&1 || true
+              mc ilm rule add --expire-days 1 local/langfuse-events
               mc ilm rule ls local/langfuse-events
               exec sleep 2147483647
           env:
