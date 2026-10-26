@@ -1,0 +1,34 @@
+---
+# SC-1613: alerta temprana de capacidad del PVC de ClickHouse de Langfuse.
+# KubePersistentVolumeFillingUp (kube-prometheus-stack) salta tarde (~90% o
+# llenado en <5d proyectado): las recurrencias del 20-10 al 22-10 (4) llegaron
+# con el PVC ya lleno. Medido el 26-10 con retención de 6 h + OPTIMIZE FINAL
+# diario: diente de sierra de 8–13 GiB sobre 80 Gi (≈16%). Un 75% mantenido 6 h
+# no es ruido del merge: es tráfico ~5x sobre lo actual o retención rota.
+# severity=warning: el safety-net de Keep solo atrapa críticas; los warning los
+# enruta el flujo ops-watch/claim-dispatch de Keep (k8s-observability-pocharlies).
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: langfuse-clickhouse-capacity
+  namespace: langfuse
+spec:
+  groups:
+    - name: langfuse-clickhouse-capacity
+      rules:
+        - alert: LangfuseClickhousePvcFillingEarly
+          expr: |
+            kubelet_volume_stats_used_bytes{persistentvolumeclaim="data-langfuse-clickhouse-shard0-0"}
+              / kubelet_volume_stats_capacity_bytes{persistentvolumeclaim="data-langfuse-clickhouse-shard0-0"} > 0.75
+          for: 6h
+          labels:
+            severity: warning
+            area: langfuse
+            component: clickhouse
+          annotations:
+            summary: "El PVC de ClickHouse de Langfuse pasa del 75% mantenido 6 h"
+            description: >-
+              data-langfuse-clickhouse-shard0-0 por encima del 75% de 80 Gi durante 6 h.
+              Con la retención de 6 h el steady-state medido es ~16%; revisar el job
+              langfuse-clickhouse-retention (OPTIMIZE FINAL) y el crecimiento de la
+              ingesta de LiteLLM antes de que salte KubePersistentVolumeFillingUp.

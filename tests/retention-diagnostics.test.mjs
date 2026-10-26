@@ -29,6 +29,10 @@ test('fetch failure reports safe context and nested cause fields', async () => {
     Date,
     encodeURIComponent,
     fetch: async () => { throw error; },
+    // SC-1613: fetchRetry reintroducido — setTimeout inmediato (el backoff no
+    // corre en el test) y AbortSignal.timeout sin señal real.
+    setTimeout: fn => fn(),
+    AbortSignal: { timeout: () => undefined },
     process: {
       env: { LANGFUSE_HOST: 'http://langfuse-web:3000', PK: 'public-key', SK: secret },
       exit: code => { exitCode = code; },
