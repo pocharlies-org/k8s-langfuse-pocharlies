@@ -47,13 +47,39 @@ data:
       }
       return details;
     };
+    // SC-1613: la reescritura del 22-10 (INFRA-969) perdió el fetchRetry de
+    // SCOLD-639 y el run de las 15:00 del 26-10 murió con "stage=delete
+    // chunk=11 HTTP 500" (500 transitorio de langfuse-web; el run de las 16:00
+    // pasó). Retry con backoff exponencial para errores de red y 408/429/5xx;
+    // timeout por petición para que un socket colgado no coma el
+    // activeDeadlineSeconds entero. El borrado es idempotente, reintentar sale barato.
+    const RETRIES = 6;
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    const fetchRetry = async (label, url, opts = {}) => {
+      let lastErr;
+      for (let attempt = 1; attempt <= RETRIES; attempt++) {
+        try {
+          const r = await fetch(url, { ...opts, signal: AbortSignal.timeout(30000) });
+          if (r.ok || (r.status < 500 && r.status !== 429 && r.status !== 408)) return r;
+          lastErr = Object.assign(new Error(`HTTP ${r.status}`), { name: 'FetchResponseError' });
+        } catch (e) {
+          lastErr = e;
+        }
+        if (attempt < RETRIES) {
+          const backoff = Math.min(60000, 2000 * 2 ** (attempt - 1)) + Math.floor(Math.random() * 500);
+          console.warn(`retry ${label} ${attempt}/${RETRIES}: ${redact(lastErr.message)}`);
+          await sleep(backoff);
+        }
+      }
+      throw lastErr;
+    };
     (async () => {
       const ids = [];
       for (let page = 1; page <= MAX_PAGES; page++) {
         operation = { stage: 'list', page };
         // fields=core: sin él, /traces serializa input/output y con ~9k trazas
         // vencidas devuelve 422 "Request timed out" (29-09-2026). Solo hace falta el id.
-        const r = await fetch(`${HOST}/api/public/traces?fields=core&toTimestamp=${encodeURIComponent(cutoff)}&limit=100&page=${page}`, { headers: H });
+        const r = await fetchRetry(`list page=${page}`, `${HOST}/api/public/traces?fields=core&toTimestamp=${encodeURIComponent(cutoff)}&limit=100&page=${page}`, { headers: H });
         if (!r.ok) throw Object.assign(new Error(`HTTP ${r.status}`), { name: 'FetchResponseError' });
         const j = await r.json();
         const batch = (j.data || []).map(t => t.id);
@@ -67,7 +93,7 @@ data:
       for (let i = 0; i < ids.length; i += 100) {
         const chunk = ids.slice(i, i + 100);
         operation = { stage: 'delete', chunk: Math.floor(i / 100) + 1 };
-        const d = await fetch(`${HOST}/api/public/traces`, { method: 'DELETE', headers: H, body: JSON.stringify({ traceIds: chunk }) });
+        const d = await fetchRetry(`delete chunk=${Math.floor(i / 100) + 1}`, `${HOST}/api/public/traces`, { method: 'DELETE', headers: H, body: JSON.stringify({ traceIds: chunk }) });
         if (!d.ok) throw Object.assign(new Error(`HTTP ${d.status}`), { name: 'FetchResponseError' });
         deleted += chunk.length;
       }
