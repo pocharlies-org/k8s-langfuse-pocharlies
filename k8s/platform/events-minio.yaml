@@ -36,6 +36,18 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "-1"
 spec:
+  # INFRA-1009: los campos que el API server rellena por defecto se declaran
+  # explícitos para que el desired coincida con el live (el controller los marcaba
+  # OutOfSync; los StatefulSet del chart, que sí los declaran, están Synced).
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      partition: 0
+  revisionHistoryLimit: 10
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
   serviceName: langfuse-events-s3
   replicas: 1
   selector:
@@ -46,6 +58,11 @@ spec:
       labels:
         app: langfuse-events-minio
     spec:
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      terminationGracePeriodSeconds: 30
+      securityContext: {}
       nodeSelector:
         kubernetes.io/hostname: ks5-cp-1
       # homelab es privado; harbor-pull lo reparte harbor-runtime-pull (k8s-infra-pocharlies
@@ -57,6 +74,9 @@ spec:
           # Copias de Harbor: minio/* ya no se descarga de Docker Hub sin login.
           image: harbor.e-dani.com/homelab/minio:RELEASE.2025-04-22T22-12-26Z@sha256:ac59a61ad2ae6ec82be02baedbf37916425877c3ac422caf9d237f629ca723d8
           args: ["server", "/data"]
+          imagePullPolicy: IfNotPresent
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
           env:
             - name: MINIO_ROOT_USER
               valueFrom:
@@ -66,12 +86,19 @@ spec:
                 secretKeyRef: {name: langfuse-secrets, key: s3-secret-access-key}
           ports:
             - containerPort: 9000
+              protocol: TCP
           readinessProbe:
-            httpGet: {path: /minio/health/ready, port: 9000}
+            httpGet: {path: /minio/health/ready, port: 9000, scheme: HTTP}
             periodSeconds: 10
+            timeoutSeconds: 1
+            successThreshold: 1
+            failureThreshold: 3
           livenessProbe:
-            httpGet: {path: /minio/health/live, port: 9000}
+            httpGet: {path: /minio/health/live, port: 9000, scheme: HTTP}
             periodSeconds: 30
+            timeoutSeconds: 1
+            successThreshold: 1
+            failureThreshold: 3
           resources:
             requests: {cpu: 100m, memory: 256Mi}
             limits: {memory: 1Gi}
@@ -82,6 +109,9 @@ spec:
         - name: bootstrap
           # La imagen del servidor no trae shell ni mc: el bootstrap va con la de mc.
           image: harbor.e-dani.com/homelab/mc:RELEASE.2025-08-13T08-35-41Z@sha256:9492e9f4661723176ce36bf2245592151641d0353dbe3354608c925d3fa0b6bd
+          imagePullPolicy: IfNotPresent
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
           command: ["sh", "-c"]
           args:
             - |
@@ -105,9 +135,12 @@ spec:
             requests: {cpu: 5m, memory: 16Mi}
             limits: {memory: 64Mi}
   volumeClaimTemplates:
-    - metadata:
+    - apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
         name: data
       spec:
+        volumeMode: Filesystem
         storageClassName: local-path
         accessModes: [ReadWriteOnce]
         resources:
