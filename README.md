@@ -44,10 +44,15 @@ A dedicated standalone Valkey isolates the queue and keeps the whole deploy GitO
 ## Secretos (1Password, sin texto plano en Git)
 
 All secrets live in the 1Password vault `k8s-pocharlies` as items, materialised by
-ExternalSecrets via the `onepassword` ClusterSecretStore. **Seed them before syncing.**
-(The ExternalSecret `key: langfuse/SALT` reads exactly the field `SALT` of the item
-`langfuse` — same item/field convention as the existing `litellm` item. Until SC-490
-these lived in Vault under the KV-v2 mount `secret`.)
+ExternalSecrets via the `onepassword-connect` ClusterSecretStore (in-cluster Connect;
+the legacy SDK store `onepassword` has no consumer left in the cluster). **Seed them
+before syncing.** With Connect the field travels as a property, so the ExternalSecret
+reads `key: langfuse` + `property: SALT` — exactly the field `SALT` of the item
+`langfuse` (same item/field convention as the `litellm` item, same form as
+`langfuse-ovh-creds`). Writing the SDK form (`key: langfuse/SALT`) against this store
+does not fail loudly: it answers `key not found in 1Password Vaults` and, because this
+ES sits in sync-wave `-5` with a health check, it fails the whole ArgoCD sync of the
+app. Until SC-490 these lived in Vault under the KV-v2 mount `secret`.
 
 Generate the crypto material:
 ```bash
