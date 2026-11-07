@@ -1,0 +1,45 @@
+---
+# INFRA-1175 (07-11): credenciales S3 para que Langfuse escriba media/exports y el
+# write-ahead de eventos en Object Storage de OVH (buckets `langfuse-pocharlies` y
+# `langfuse-events-pocharlies`). Antes: la MinIO de sauvage (clave limitada al bucket) y
+# una MinIO propia en el NVMe de ks5-cp-1, ambas con credenciales del item `langfuse`.
+#
+# 1Password (vault k8s-pocharlies), item `ovh-object-storage-s3`:
+#   access_key / secret_key  -> usuario S3 `k8s-objectstore`, compartido con
+#                              velero/cnpg/loki/harbor/dumps/aurora. La rotacion es el
+#                              lote semanal con Dani (`security.e-dani.com/rotation-class`).
+#
+# `refreshPolicy: OnChange` + `refreshInterval`: tras rotar en 1Password el Secret se
+# actualiza solo; los pods de Langfuse leen las credenciales por `secretKeyRef` en el
+# entorno, asi que el proceso viejo sigue con la clave antigua en memoria hasta el
+# reinicio — rotar exige reiniciar `langfuse-web` y `langfuse-worker`.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: langfuse-ovh-creds
+  namespace: langfuse
+  labels:
+    app.kubernetes.io/name: langfuse
+    app.kubernetes.io/component: object-storage-credentials
+    security.e-dani.com/rotation-class: object-storage
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"
+spec:
+  refreshInterval: 24h
+  refreshPolicy: OnChange
+  secretStoreRef:
+    name: onepassword-connect
+    kind: ClusterSecretStore
+  target:
+    name: langfuse-ovh-creds
+    creationPolicy: Owner
+    deletionPolicy: Retain
+  data:
+    - secretKey: access-key
+      remoteRef:
+        key: ovh-object-storage-s3
+        property: access_key
+    - secretKey: secret-key
+      remoteRef:
+        key: ovh-object-storage-s3
+        property: secret_key

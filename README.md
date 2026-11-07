@@ -30,7 +30,7 @@ namespace allowlist, so `langfuse.e-dani.com` is exposed via a central IngressRo
 | Componente  | Decisión                     | Destino |
 |-------------|------------------------------|---------|
 | PostgreSQL  | **REUSE** shared CNPG        | `postgres-shared-rw.databases.svc:5432` DB `langfuse`, role `langfuse` |
-| S3 / blob   | **REUSE** shared MinIO + own events MinIO | `minio-s3.minio.svc:9000` bucket `langfuse` (`media/ exports/`); events → `langfuse-events-s3.langfuse.svc:9000` bucket `langfuse-events` on ks5-cp-1 NVMe (INFRA-931) |
+| S3 / blob   | **OVH Object Storage** (INFRA-1175, 07-11) | `https://s3.sbg.io.cloud.ovh.net` region `sbg`, path-style: media/exports → bucket `langfuse-pocharlies`, events → bucket `langfuse-events-pocharlies`. Antes: MinIO de sauvage + una MinIO propia en el NVMe de ks5-cp-1 (INFRA-931), las dos retiradas |
 | Redis/Valkey| **DEDICATED** (chart)        | `langfuse-redis-primary:6379` (BullMQ queue, `noeviction`) |
 | ClickHouse  | **DEDICATED** (chart, 1 node)| `langfuse-clickhouse:8123/9000` (required by v3; none existed in-cluster) |
 
@@ -58,15 +58,14 @@ PROJECT_PUBLIC_KEY="pk-lf-$(openssl rand -hex 16)"
 PROJECT_SECRET_KEY="sk-lf-$(openssl rand -hex 16)"
 ```
 
-item `langfuse` (app + CNPG role + MinIO creds + head-less bootstrap):
+item `langfuse` (app + CNPG role + head-less bootstrap; **sin credenciales de blob** desde
+INFRA-1175, esas viven en el item compartido `ovh-object-storage-s3`):
 ```bash
 op item edit langfuse --vault=k8s-pocharlies \
   SALT="$SALT" ENCRYPTION_KEY="$ENCRYPTION_KEY" NEXTAUTH_SECRET="$NEXTAUTH_SECRET" \
   DB_USER=langfuse DB_PASSWORD="$(openssl rand -base64 36 | tr -dc 'A-Za-z0-9' | head -c 32)" \
   REDIS_PASSWORD="$(openssl rand -base64 36 | tr -dc 'A-Za-z0-9' | head -c 32)" \
   CLICKHOUSE_PASSWORD="$(openssl rand -base64 36 | tr -dc 'A-Za-z0-9' | head -c 32)" \
-  S3_ACCESS_KEY_ID="<minio access key for bucket langfuse>" \
-  S3_SECRET_ACCESS_KEY="<minio secret key>" \
   INIT_PROJECT_PUBLIC_KEY="$PROJECT_PUBLIC_KEY" \
   INIT_PROJECT_SECRET_KEY="$PROJECT_SECRET_KEY" \
   INIT_USER_EMAIL="me@e-dani.com" \
@@ -80,20 +79,24 @@ op item edit litellm --vault=k8s-pocharlies \
   LANGFUSE_SECRET_KEY="$PROJECT_SECRET_KEY"
 ```
 
-MinIO credentials: **you MUST create a bucket-scoped access key** limited to
-`arn:aws:s3:::langfuse/*` and put it in `S3_ACCESS_KEY_ID/S3_SECRET_ACCESS_KEY`. Do NOT
-reuse the MinIO root key or any broad key — a compromised Langfuse pod would otherwise
-reach every bucket in the shared MinIO (velero-backups, cnpg-backups, harbor-blobs,
-loki-chunks, longhorn-backups). The bucket itself is created by
-`k8s-infra-pocharlies/storage/minio/bootstrap-buckets.yaml`.
+Credenciales de blob: las materializa el ExternalSecret `platform/ovh-creds.yaml` (item
+1Password `ovh-object-storage-s3`, usuario S3 `k8s-objectstore`). **No crear una clave
+propia ni poner la clave en claro en `values.yaml`.** Caveat conocido y aceptado en el
+epic INFRA-1175: ese usuario es compartido con velero/cnpg/loki/harbor/dumps/aurora, así
+que un pod de Langfuse comprometido alcanza todos los buckets de OVH de la casa; la
+cobertura es la rotación semanal con Dani (`security.e-dani.com/rotation-class:
+object-storage`), no un aislamiento por bucket. Los buckets `langfuse-pocharlies` y
+`langfuse-events-pocharlies` ya existen (nombres **globales** en OVH: el sufijo
+`-pocharlies` es obligatorio, no decorativo).
 
 ## Orden de despliegue (GitOps)
 
 1. **Create the GitHub repo** `pocharlies-org/k8s-langfuse-pocharlies`, push this tree,
-   create branch **`deploy/prod`** (that's the `targetRevision`).
+   trunk **`main`** (that's the `targetRevision` the ArgoCD app reads; verified live).
 2. **Seed 1Password** (item `langfuse` + `litellm` keys above).
 3. **Merge/sync `k8s-infra-pocharlies`** first (adds the `langfuse` CNPG role + `langfuse`
-   Database + `langfuse-db-credentials` ESO + the MinIO `langfuse` bucket). Wait for the
+   Database + `langfuse-db-credentials` ESO). Los buckets de blob ya no los crea `k8s-infra`: son
+   `langfuse-pocharlies` y `langfuse-events-pocharlies` en OVH (INFRA-1175). Wait for the
    `k8s-infra` app to be Synced/Healthy so the DB + bucket exist.
 4. **Merge/sync `k8s-gitops-pocharlies`** (registers the repo + Helm chart in
    `argocd/repositories.yaml`, adds `apps/langfuse.yaml`, kustomization line).
@@ -172,7 +175,7 @@ three `LANGFUSE_*` env vars; sync litellm.
 3. PVCs for ClickHouse/Valkey are `Retain`-class — delete them manually if you want the
    storage back: `kubectl -n langfuse delete pvc -l app.kubernetes.io/instance=langfuse`.
 4. Optional: drop the `langfuse` CNPG `Database`/role and `langfuse-db-credentials` ESO
-   from `k8s-infra-pocharlies`, and the `langfuse` MinIO bucket line.
+   from `k8s-infra-pocharlies`. Los buckets de OVH se dejan; se retiran si se jubila Langfuse.
 5. Optional: `op item delete langfuse --vault=k8s-pocharlies` and remove the two
    LANGFUSE_* keys from the `litellm` item.
 

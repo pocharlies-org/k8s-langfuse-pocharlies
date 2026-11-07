@@ -2,7 +2,7 @@
 # Langfuse trace retention (6h). OSS carece de retención nativa (es EE-gated), así que
 # un CronJob horario borra las trazas más antiguas que RETENTION_HOURS vía el API público.
 # El histórico es solo para depurar en vivo (Dani, 22-10): 6 h, no días.
-# El borrado CASCADEA: elimina observations/scores en ClickHouse y los blobs S3 (MinIO).
+# El borrado CASCADEA: elimina observations/scores en ClickHouse y los blobs S3 (desde INFRA-1175, OVH).
 # Idempotente: primero COLECTA todos los ids expirados (paginando por número de página),
 # luego borra en lotes — evita el problema de borrar-mientras-paginas.
 # Motivo PII: content-logging está ON → los mensajes de cliente viven en las trazas; cap 6h.

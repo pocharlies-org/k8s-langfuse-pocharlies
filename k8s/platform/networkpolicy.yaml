@@ -10,7 +10,7 @@
 # stores are not blanket-opened on all ports by this file.
 #
 # Egress is intentionally unrestricted (Ingress-only policy) so Langfuse can reach the
-# shared Postgres (databases ns), MinIO (minio ns) and its own CH/Valkey.
+# shared Postgres (databases ns), OVH Object Storage (https por internet) and its own CH/Valkey.
 #
 # Hardening TODO (not enabled to keep the first deploy low-risk): disable the subchart
 # NetworkPolicies (redis.networkPolicy.enabled / clickhouse.networkPolicy.enabled) and add
