@@ -5,14 +5,16 @@
 #
 # Topology decision (see README.md §Arquitectura):
 #   - PostgreSQL  -> REUSE shared CNPG cluster `postgres-shared` (own DB `langfuse`, role `langfuse`)
-#   - S3 / blob   -> REUSE shared MinIO (`minio-s3.minio.svc`, own bucket `langfuse`)
+#   - S3 / blob   -> OVH Object Storage (`s3.sbg.io.cloud.ovh.net`, buckets `langfuse-pocharlies`
+#                    y `langfuse-events-pocharlies`); INFRA-1175, antes la MinIO de sauvage y
+#                    una MinIO propia en el NVMe de ks5-cp-1
 #   - Redis/Valkey-> DEDICATED (chart-bundled) — isolated BullMQ queue, avoids shared-valkey
 #                    Sentinel + out-of-band ACL secret. Switch to shared-valkey: see README §Rollback.
 #   - ClickHouse  -> DEDICATED (chart-bundled), single node — required by v3, no in-cluster CH existed.
 #
-# All secrets come from the k8s Secret `langfuse-secrets`, materialised by the
-# ExternalSecret in k8s/platform/externalsecret.yaml (1Password item `langfuse`,
-# vault `k8s-pocharlies`).
+# Secrets: la mayoria del k8s Secret `langfuse-secrets` (ExternalSecret
+# k8s/platform/externalsecret.yaml, item 1Password `langfuse`), y las de blob S3 del
+# Secret `langfuse-ovh-creds` (k8s/platform/ovh-creds.yaml, item `ovh-object-storage-s3`).
 # NOTHING sensitive is stored in this file.
 
 global:
@@ -219,29 +221,37 @@ clickhouse:
   nodeSelector:
     kubernetes.io/arch: amd64
 
-# ---- S3 / blob: EXTERNAL (shared MinIO) ----
+# ---- S3 / blob: OVH Object Storage (INFRA-1175) ----
+# Corte del 07-11: los dos stores de blob (media/exports, y el write-ahead de eventos que
+# INFRA-931 puso en una MinIO propia en el NVMe de ks5-cp-1 para no saturar el RAID HDD de
+# sauvage) pasan al Object Storage de OVH. `forcePathStyle` sigue siendo obligatorio: en OVH
+# el bucket viaja en la ruta, no en el subdominio.
+# Retencion: la de Dani (07-11) es un maximo de 48 h y ya se cumple de sobra — el CronJob
+# `langfuse-retention` purga a RETENTION_HOURS=6 y el cascade borra tambien los blobs S3.
+# Las credenciales vienen del Secret `langfuse-ovh-creds` (ExternalSecret
+# platform/ovh-creds.yaml, item 1Password `ovh-object-storage-s3`, usuario S3 `k8s-objectstore`).
+# Nada de esto se mide en local: tras el merge hay que comprobar la ingesta real y que el job
+# de retencion sigue cabiendo en sus 1800 s con los DELETEs por WAN (~0,8 s por operacion).
 s3:
   deploy: false
   storageProvider: s3
-  bucket: langfuse
-  region: auto
-  endpoint: http://minio-s3.minio.svc.cluster.local:9000
-  forcePathStyle: true          # required for MinIO
+  bucket: langfuse-pocharlies
+  region: sbg
+  endpoint: https://s3.sbg.io.cloud.ovh.net
+  forcePathStyle: true          # obligatorio tambien en OVH
   accessKeyId:
-    secretKeyRef: { name: langfuse-secrets, key: s3-access-key-id }
+    secretKeyRef: { name: langfuse-ovh-creds, key: access-key }
   secretAccessKey:
-    secretKeyRef: { name: langfuse-secrets, key: s3-secret-access-key }
-  # INFRA-931: los eventos (~1 PUT/s, objetos pequeños) van al MinIO propio en el NVMe
-  # de ks5-cp-1 (platform/events-minio.yaml), fuera del RAID de HDD de sauvage.
+    secretKeyRef: { name: langfuse-ovh-creds, key: secret-key }
   eventUpload:
-    bucket: langfuse-events
-    endpoint: http://langfuse-events-s3.langfuse.svc.cluster.local:9000
-    region: auto
+    bucket: langfuse-events-pocharlies
+    endpoint: https://s3.sbg.io.cloud.ovh.net
+    region: sbg
     forcePathStyle: true
     accessKeyId:
-      secretKeyRef: { name: langfuse-secrets, key: s3-access-key-id }
+      secretKeyRef: { name: langfuse-ovh-creds, key: access-key }
     secretAccessKey:
-      secretKeyRef: { name: langfuse-secrets, key: s3-secret-access-key }
+      secretKeyRef: { name: langfuse-ovh-creds, key: secret-key }
     prefix: "events/"
   mediaUpload:
     enabled: true

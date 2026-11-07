@@ -15,10 +15,11 @@ LAN por `ingressroute-lan.yaml` (sin SSO).
 
 ## 2. Dependencias, en ambos sentidos
 
-- **Depende de** — Postgres compartido (`postgres-shared-rw.databases`, bd/rol `langfuse`), MinIO compartido
-  (`minio-s3.minio:9000`, bucket `langfuse` con clave **limitada al bucket**; el bucket lo crea
-  `k8s-infra-pocharlies/storage/minio/bootstrap-buckets.yaml`), ClickHouse y Valkey **dedicados** del chart, 1Password
-  (`ClusterSecretStore onepassword`, item `langfuse`), `sso-chain` de Traefik.
+- **Depende de** — Postgres compartido (`postgres-shared-rw.databases`, bd/rol `langfuse`), Object Storage
+  de OVH (`https://s3.sbg.io.cloud.ovh.net`, region `sbg`, path-style; buckets `langfuse-pocharlies` para
+  media/exports y `langfuse-events-pocharlies` para el write-ahead de eventos — INFRA-1175, 07-11: antes, la
+  MinIO de sauvage y una MinIO propia en ks5-cp-1), ClickHouse y Valkey **dedicados** del chart, 1Password
+  (`ClusterSecretStore onepassword-connect`, items `langfuse` y `ovh-object-storage-s3`), `sso-chain` de Traefik.
 - **Dependen de él** — `k8s-litellm-pocharlies` (callback de trazas; mismas `LANGFUSE_PUBLIC/SECRET_KEY` en el item
   `litellm`); consumidores del test `tests/retention-diagnostics.test.mjs`: nadie más.
 - **ArgoCD** `langfuse`: repo `pocharlies-org/k8s-langfuse-pocharlies`, path `k8s/platform` + chart externo, tronco **`main`**.
@@ -36,7 +37,8 @@ LAN por `ingressroute-lan.yaml` (sin SSO).
 
 | concepto | pieza canónica | ruta | quién la usa |
 |---|---|---|---|
-| Postgres / MinIO | `postgres-shared`, `minio-s3` | `k8s-infra-pocharlies` | langfuse |
+| Postgres | `postgres-shared` | `k8s-infra-pocharlies` | langfuse |
+| Object Storage (blob) | buckets `langfuse*` en OVH, usuario S3 `k8s-objectstore` | manager de OVH; credencial en 1Password `ovh-object-storage-s3` | langfuse |
 | Retención de trazas | `langfuse-retention` | `k8s/platform/retention-cronjob.yaml` | este repo |
 | Secretos | ExternalSecret `langfuse-secrets` | `k8s/platform/externalsecret.yaml` | chart |
 
@@ -65,6 +67,8 @@ node --test tests/retention-diagnostics.test.mjs
 - Valkey dedicado en vez de `shared-valkey`: el ACL de ese está fuera de Git (`shared-valkey-acl`); cambiarlo exige añadir usuario
   allí (ver «Rollback» del README).
 - Hasta SC-490 los secretos vivían en Vault KV-v2; ahora en 1Password (mismo convenio `item/field` que `litellm`).
-- Nunca reutilizar la clave root de MinIO: un pod de Langfuse comprometido alcanzaría velero/cnpg/harbor/loki/longhorn.
+- La credencial de blob es el usuario S3 **compartido** `k8s-objectstore` de OVH (misma que velero/cnpg/loki/harbor/dumps/aurora):
+  un pod de Langfuse comprometido alcanza todos los buckets de la casa. Es el caveat aceptado del epic; la cobertura es la
+  rotación semanal con Dani, no un aislamiento por bucket.
 
-Última verificación contra el código: 2026-10-01 · 4cb9a8a (origin/main)
+Última verificación contra el código: 2026-11-07 · INFRA-1175 (corte de blob a OVH)
