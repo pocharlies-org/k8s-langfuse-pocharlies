@@ -31,7 +31,7 @@ LAN por `ingressroute-lan.yaml` (sin SSO).
 | Langfuse | 3.205.1 | observabilidad LLM | LangSmith/Helicone |
 | ClickHouse (1 nodo, chart) | chart | requerido por v3 | — |
 | Valkey dedicado (`noeviction`) | chart | cola BullMQ | `shared-valkey` (Sentinel + ACL fuera de Git) |
-| Node 20 (imagen langfuse) | — | CronJob `langfuse-retention` 04:00 UTC | imagen propia |
+| Node 20 (imagen langfuse) | — | CronJob `langfuse-retention` **cada hora** (`0 * * * *`) | imagen propia |
 
 ## 4. Componentes compartidos
 
@@ -59,7 +59,8 @@ node --test tests/retention-diagnostics.test.mjs
 
 - Solo `pr-review.yml` (**sin `ci.yml`**: ni kustomize/helm lint ni el test Node se ejecutan en CI → hueco para el tech-lead).
 - Despliegue: merge a `main` → ArgoCD. **Validación en producción**: login en `https://langfuse.e-dani.com` y ver una traza
-  reciente de LiteLLM; CronJob `langfuse-retention` con último Job `Complete`. Synced ≠ funcionando. Pendiente de ejecutar.
+  reciente de LiteLLM; CronJob `langfuse-retention` con último Job `Complete`. Synced ≠ funcionando.
+  Último run medido: 2026-11-07 02:00 UTC, `expired=1535 deleted=1535` en `Complete`.
 - Subir versión: cambiar `targetRevision` del chart **en `k8s-gitops-pocharlies/apps/langfuse.yaml`** y la imagen de retención.
 
 ## 8. Decisiones y trampas
