@@ -236,8 +236,21 @@ spec:
             - name: clickhouse-retention
               image: docker.io/bitnamilegacy/clickhouse:25.2.1-debian-12-r0
               command: ["/bin/bash", "-ec"]
+              # SC-6318 (23-11-2026): el run de las 03:30 UTC fallo con "Code: 210
+              # Connection refused (langfuse-clickhouse:9000)" porque atlantic entro en
+              # presion de memoria (~122/128 GiB, paseo-0 crecio ~38 GB desde las 03:15)
+              # y el kubelet desalojo langfuse-clickhouse-shard0-0 (recreado 03:34:02,
+              # listo 03:35:20). Los 3 intentos del backoff (03:30:00/13/36) cayeron
+              # todos dentro de la ventana de indisponibilidad. Espera acotada de
+              # conectividad (hasta 10 min de los 60 de activeDeadlineSeconds) antes de
+              # ejecutar el SQL: un desalojo transitorio del servidor ya no tumba el job.
               args:
                 - >-
+                  for i in $(seq 1 60); do
+                  if clickhouse-client --host langfuse-clickhouse --user "$CLICKHOUSE_USER"
+                  --password "$CLICKHOUSE_PASSWORD" --query 'SELECT 1' >/dev/null 2>&1; then break; fi;
+                  echo "esperando langfuse-clickhouse: intento $i/60"; sleep 10;
+                  done;
                   clickhouse-client
                   --host langfuse-clickhouse
                   --user "$CLICKHOUSE_USER"
