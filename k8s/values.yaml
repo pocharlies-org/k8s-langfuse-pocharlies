@@ -67,12 +67,10 @@ langfuse:
   nodeSelector:
     kubernetes.io/arch: amd64
 
-  # Node's default heap (~1.7 GiB) is smaller than the 2Gi container limit -> OOM.
-  # Pin it to the container size on web; the worker overrides this below (heap must
-  # stay below its limit, not equal to it).
+  # NODE_OPTIONS va por despliegue (web.pod / worker.pod): el chart concatena la
+  # lista global con la de cada pod y un duplicado rompe el diff de ArgoCD
+  # (ComparisonError: duplicate entries for key [name="NODE_OPTIONS"]).
   additionalEnv:
-    - name: NODE_OPTIONS
-      value: "--max-old-space-size=2048"
     # Evaluator create-time preflight runs a synchronous structured-output call using
     # json_schema-strict for openai-adapter LLM connections; against the on-prem reasoning
     # model over vLLM this stalls ~50s (guided decoding) -> the 120s runtime cap fires ->
@@ -104,6 +102,10 @@ langfuse:
       # boot if absent. The project pk-lf-/sk-lf- pair is the SAME one LiteLLM
       # uses (mirrored into Vault secret/litellm). See README §Secretos.
       additionalEnv:
+        # Como antes del 26-11 (estaba en la lista global): heap == límite de 2Gi,
+        # web nunca se acerca a él y no se toca en este fix.
+        - name: NODE_OPTIONS
+          value: "--max-old-space-size=2048"
         - name: LANGFUSE_INIT_ORG_ID
           value: "edani"
         - name: LANGFUSE_INIT_ORG_NAME
