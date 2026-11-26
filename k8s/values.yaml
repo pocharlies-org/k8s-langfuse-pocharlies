@@ -129,20 +129,24 @@ langfuse:
     replicas: 1
     resources:
       requests: { cpu: 200m, memory: 2Gi }
-      limits:   { memory: 4Gi }
+      limits:   { memory: 6Gi }
     pod:
-      # 26-11: 12 días de CrashLoopBackOff por OOMKilled (exit 137) a los ~40-60 s de cada
-      # arranque. Medido: working set tocaba el límite exacto (2.00 GiB) mientras el worker
-      # drenaba el backlog BullMQ que se re-encola al morir (trace-delete 1376 jobs de ~2.3k
-      # ids, otel-ingestion 918). El heap de V8 estaba clavado a 2048 MB = límite del
-      # contenedor: sin margen para memoria nativa (buffers S3, cliente ClickHouse), el
-      # cgroup mataba al proceso antes de que el GC pudiera reaccionar. 4Gi con heap 3072
-      # deja ~1Gi de margen (75% del límite, práctica estándar de Node en contenedor).
-      # Si el OOM volviera con esto, lo siguiente es bajar langfuse.s3.concurrency (50/50,
-      # default del chart), no subir más memoria a ciegas.
+      # 26-11 (INFRA-1590), dos pasos medidos:
+      # 1) 12 días de OOMKilled (exit 137) a los ~40-60 s: working set tocaba el límite
+      #    exacto (2.00 GiB) drenando el backlog BullMQ que se re-encola al morir
+      #    (trace-delete ~1.4k jobs de ~2.3k ids, otel-ingestion ~1.9k). El heap estaba
+      #    clavado a 2048 = límite del contenedor: el cgroup mataba antes que el GC.
+      # 2) Con 4Gi/heap 3072 el kill del cgroup desapareció pero a los ~6.5 min V8 dijo
+      #    "Reached heap limit" (exit 134) a 3071 MB: el heap en sí necesita >3 GiB con
+      #    LiteLLM entrando a tope (trazas con prompts enteros) + cola de 12 días.
+      # 6Gi con heap 4608 (75% del límite). El backlog es finito; al drenarse, baja.
+      # Si el heap volviera a llenar 4608, el siguiente paso medido es bajar
+      # LANGFUSE_OTEL_INGESTION_QUEUE_PROCESSING_CONCURRENCY y
+      # LANGFUSE_INGESTION_CLICKHOUSE_WRITE_BATCH_SIZE (1000, confirmado en la imagen),
+      # no seguir subiendo memoria.
       additionalEnv:
         - name: NODE_OPTIONS
-          value: "--max-old-space-size=3072"
+          value: "--max-old-space-size=4608"
 
 # ---- PostgreSQL: EXTERNAL (shared CNPG cluster) ----
 postgresql:
