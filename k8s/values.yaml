@@ -68,7 +68,8 @@ langfuse:
     kubernetes.io/arch: amd64
 
   # Node's default heap (~1.7 GiB) is smaller than the 2Gi container limit -> OOM.
-  # Pin it to the container size on BOTH web and worker.
+  # Pin it to the container size on web; the worker overrides this below (heap must
+  # stay below its limit, not equal to it).
   additionalEnv:
     - name: NODE_OPTIONS
       value: "--max-old-space-size=2048"
@@ -125,8 +126,21 @@ langfuse:
   worker:
     replicas: 1
     resources:
-      requests: { cpu: 200m, memory: 1Gi }
-      limits:   { memory: 2Gi }
+      requests: { cpu: 200m, memory: 2Gi }
+      limits:   { memory: 4Gi }
+    pod:
+      # 26-11: 12 días de CrashLoopBackOff por OOMKilled (exit 137) a los ~40-60 s de cada
+      # arranque. Medido: working set tocaba el límite exacto (2.00 GiB) mientras el worker
+      # drenaba el backlog BullMQ que se re-encola al morir (trace-delete 1376 jobs de ~2.3k
+      # ids, otel-ingestion 918). El heap de V8 estaba clavado a 2048 MB = límite del
+      # contenedor: sin margen para memoria nativa (buffers S3, cliente ClickHouse), el
+      # cgroup mataba al proceso antes de que el GC pudiera reaccionar. 4Gi con heap 3072
+      # deja ~1Gi de margen (75% del límite, práctica estándar de Node en contenedor).
+      # Si el OOM volviera con esto, lo siguiente es bajar langfuse.s3.concurrency (50/50,
+      # default del chart), no subir más memoria a ciegas.
+      additionalEnv:
+        - name: NODE_OPTIONS
+          value: "--max-old-space-size=3072"
 
 # ---- PostgreSQL: EXTERNAL (shared CNPG cluster) ----
 postgresql:
